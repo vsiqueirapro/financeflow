@@ -164,7 +164,7 @@ function createInitialData() {
 }
 
 /**
- * Salva ou atualiza o arquivo JSON no Google Drive
+ * Salva ou atualiza o arquivo JSON no Google Drive com proteção contra payload vazio
  */
 function saveDataToDrive(jsonData) {
   jsonData.lastUpdated = new Date().toISOString();
@@ -173,6 +173,32 @@ function saveDataToDrive(jsonData) {
   
   if (files.hasNext()) {
     const file = files.next();
+
+    // Blindagem de segurança: evita que um dispositivo recém-instalado ou zerado
+    // sobrescreva um banco de dados na nuvem que já possui contas ou lançamentos
+    try {
+      const currentContent = file.getBlob().getDataAsString();
+      if (currentContent && currentContent.trim().length > 0) {
+        const existing = JSON.parse(currentContent);
+        const existingCount = (existing.accounts ? existing.accounts.length : 0) +
+                              (existing.cards ? existing.cards.length : 0) +
+                              (existing.fiis ? existing.fiis.length : 0) +
+                              (existing.transactions ? existing.transactions.length : 0);
+        
+        const newCount = (jsonData.accounts ? jsonData.accounts.length : 0) +
+                         (jsonData.cards ? jsonData.cards.length : 0) +
+                         (jsonData.fiis ? jsonData.fiis.length : 0) +
+                         (jsonData.transactions ? jsonData.transactions.length : 0);
+
+        if (existingCount > 0 && newCount === 0 && !jsonData.forceReset) {
+          Logger.log("Proteção ativada: tentativa de sobrescrever " + existingCount + " registros com payload vazio ignorada.");
+          return;
+        }
+      }
+    } catch (e) {
+      Logger.log("Erro na verificação de segurança: " + e.toString());
+    }
+
     file.setContent(jsonString);
   } else {
     DriveApp.createFile(DB_FILENAME, jsonString, MimeType.PLAIN_TEXT);

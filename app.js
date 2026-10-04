@@ -195,7 +195,15 @@ function validateDriveUrl(url) {
   return { valid: true };
 }
 
-async function syncWithGoogleDrive(direction = 'push', isBackground = false) {
+function isLocalDataEmpty() {
+  const accCount = (appState.accounts || []).length;
+  const cardCount = (appState.cards || []).length;
+  const fiiCount = (appState.fiis || []).length;
+  const txCount = (appState.transactions || []).length;
+  return (accCount + cardCount + fiiCount + txCount) === 0;
+}
+
+async function syncWithGoogleDrive(direction = 'push', isBackground = false, forceReset = false) {
   const url = appState.settings.driveScriptUrl ? appState.settings.driveScriptUrl.trim() : '';
   if (!url) {
     updateSyncStatus('offline');
@@ -206,15 +214,29 @@ async function syncWithGoogleDrive(direction = 'push', isBackground = false) {
     return;
   }
 
+  // PROTEÇÃO ESSENCIAL MULTI-DISPOSITIVO:
+  // Se o dispositivo local estiver vazio (ex: celular conectando pela 1ª vez),
+  // NUNCA envia dados vazios para a nuvem. Em vez disso, converte para 'pull' para baixar o banco do Drive!
+  if (direction === 'push' && isLocalDataEmpty() && !forceReset) {
+    console.warn('Dispositivo local vazio. Convertendo envio em download para não apagar o Drive...');
+    if (!isBackground) {
+      showToast('Dispositivo sem dados. Baixando seus dados do Google Drive...', 'info');
+    }
+    return syncWithGoogleDrive('pull', isBackground);
+  }
+
   updateSyncStatus('saving');
 
   try {
     const token = appState.settings.driveToken || '';
 
     if (direction === 'push') {
+      const dataToSave = JSON.parse(JSON.stringify(appState));
+      if (forceReset) dataToSave.forceReset = true;
+
       const payload = {
         action: 'save',
-        data: appState,
+        data: dataToSave,
         token: token
       };
 
@@ -311,9 +333,15 @@ function saveDriveSettings() {
     if (tokenInput) {
       appState.settings.driveToken = tokenInput.value.trim();
     }
-    saveLocalState();
-    showToast('Configurações salvas. Iniciando sincronização...', 'success');
-    syncWithGoogleDrive('push');
+    saveLocalStateOnly();
+
+    if (isLocalDataEmpty()) {
+      showToast('Conectado! Baixando seus dados do Google Drive...', 'info');
+      syncWithGoogleDrive('pull');
+    } else {
+      showToast('Configurações salvas. Sincronizando...', 'success');
+      syncWithGoogleDrive('push');
+    }
   }
 }
 
@@ -347,10 +375,16 @@ function saveDriveSettingsFromModal() {
       document.getElementById('settingsDriveToken').value = tokenInput.value.trim();
     }
 
-    saveLocalState();
+    saveLocalStateOnly();
     closeModal('modalDrive');
-    showToast('Google Drive conectado! Sincronizando...', 'success');
-    syncWithGoogleDrive('push');
+
+    if (isLocalDataEmpty()) {
+      showToast('Conectado! Baixando seus dados do Google Drive...', 'info');
+      syncWithGoogleDrive('pull');
+    } else {
+      showToast('Google Drive conectado! Sincronizando...', 'success');
+      syncWithGoogleDrive('push');
+    }
   }
 }
 
@@ -2659,9 +2693,12 @@ function confirmResetAllData() {
         driveToken: driveToken
       }
     };
-    saveLocalState();
+    saveLocalStateOnly();
     renderApp();
     showToast('Todos os dados foram resetados.', 'info');
+    if (appState.settings.driveScriptUrl) {
+      syncWithGoogleDrive('push', false, true);
+    }
   }
 }
 
