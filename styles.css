@@ -288,6 +288,10 @@ a:hover {
   background: var(--fii-bg);
   color: var(--fii-color);
 }
+.pill-expense {
+  background: var(--expense-bg);
+  color: var(--expense);
+}
 
 .nav-divider {
   height: 1px;

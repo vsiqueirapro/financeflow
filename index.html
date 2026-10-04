@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="FinanceFlow">
-  <meta name="description" content="Sistema completo de controle financeiro pessoal, contas bancárias, FIIs e sincronização no Google Drive.">
+  <meta name="description" content="Sistema completo de controle financeiro pessoal, contas bancárias, cartões de crédito, FIIs e sincronização no Google Drive.">
   <title>FinanceFlow | Controle Financeiro Inteligente & FIIs</title>
   
   <link rel="manifest" href="manifest.json">
@@ -62,13 +62,19 @@
 
         <button class="nav-item" data-view="accounts" id="nav-accounts">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>
-          <span>Contas & Bancos</span>
+          <span>Contas Bancárias</span>
           <span class="nav-pill" id="accountsCountBadge">0</span>
+        </button>
+
+        <button class="nav-item" data-view="cards" id="nav-cards">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/><circle cx="7" cy="15" r="1.5"/><circle cx="11" cy="15" r="1.5"/></svg>
+          <span>Cartões de Crédito</span>
+          <span class="nav-pill pill-expense" id="cardsCountBadge">0</span>
         </button>
 
         <button class="nav-item" data-view="fiis" id="nav-fiis">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M3 10h18M5 6l7-3 7 3M4 10v11M20 10v11M8 14v4M12 14v4M16 14v4"/></svg>
-          <span>FIIs & Proventos</span>
+          <span>FIIs & Investimentos</span>
           <span class="nav-pill pill-accent" id="fiisCountBadge">0</span>
         </button>
 
@@ -107,7 +113,7 @@
       <!-- TOPBAR -->
       <header class="app-topbar">
         <div class="topbar-left">
-          <button class="btn-icon mobile-menu-btn" id="mobileMenuBtn" aria-label="Menu">
+          <button class="btn-icon mobile-menu-btn" id="mobileMenuBtn" aria-label="Menu" onclick="toggleMobileSidebar()">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
           </button>
           
@@ -177,7 +183,7 @@
                   <svg class="eye-closed hidden" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>
                 </button>
               </div>
-              <p class="hero-subtext">Soma de contas bancárias correntes, carteiras e investimentos em FIIs deduzindo cartões.</p>
+              <p class="hero-subtext">Soma real de contas bancárias e saldo em FIIs deduzindo as faturas atuais de cartão de crédito.</p>
             </div>
             
             <div class="hero-stats-chips">
@@ -186,7 +192,7 @@
                 <span class="chip-val color-brand" id="dashTotalBankBalance">R$ 0,00</span>
               </div>
               <div class="chip-stat">
-                <span class="chip-label">Patrimônio em FIIs</span>
+                <span class="chip-label">Saldo em FIIs</span>
                 <span class="chip-val color-fiis" id="dashTotalFiisBalance">R$ 0,00</span>
               </div>
               <div class="chip-stat">
@@ -239,14 +245,14 @@
 
             <div class="kpi-card card-dividends">
               <div class="kpi-header">
-                <span class="kpi-title">Proventos FIIs Estimados</span>
+                <span class="kpi-title">Proventos FIIs no Mês</span>
                 <div class="kpi-icon icon-sparkle">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
                 </div>
               </div>
               <div class="kpi-value color-emerald" id="dashEstimatedDividends">R$ 0,00/mês</div>
               <div class="kpi-footer">
-                <span id="dashPortfolioYieldAvg">Yield médio: 0.00% a.m.</span>
+                <span id="dashPortfolioYieldAvg">Renda passiva informada</span>
               </div>
             </div>
           </div>
@@ -258,10 +264,10 @@
               <div class="chart-header">
                 <div>
                   <h3 class="chart-title">Evolução Patrimonial ao Longo do Tempo</h3>
-                  <p class="chart-subtitle">Histórico consolidado do seu patrimônio com base nos ajustes de saldo e movimentações</p>
+                  <p class="chart-subtitle">Histórico 100% real baseado nos seus ajustes de saldo e lançamentos cadastrados</p>
                 </div>
                 <div class="chart-actions">
-                  <span class="tag-status tag-live">Atualização em tempo real</span>
+                  <span class="tag-status tag-live">Dados Reais</span>
                 </div>
               </div>
               <div class="chart-canvas-container large-chart">
@@ -274,7 +280,7 @@
               <div class="chart-header">
                 <div>
                   <h3 class="chart-title">Despesas por Categoria</h3>
-                  <p class="chart-subtitle">Distribuição dos seus gastos no mês</p>
+                  <p class="chart-subtitle">Distribuição dos seus gastos reais neste mês</p>
                 </div>
               </div>
               <div class="chart-canvas-container doughnut-chart">
@@ -288,7 +294,7 @@
               <div class="chart-header">
                 <div>
                   <h3 class="chart-title">Gastos: CASA vs PESSOAL</h3>
-                  <p class="chart-subtitle">Comparativo de despesas por finalidade definida</p>
+                  <p class="chart-subtitle">Comparativo real de despesas por finalidade definida</p>
                 </div>
               </div>
               <div class="chart-canvas-container bar-chart">
@@ -304,7 +310,7 @@
               <div class="block-header">
                 <div>
                   <h3 class="block-title">Contas Bancárias</h3>
-                  <p class="block-subtitle">Saldos e finalidades</p>
+                  <p class="block-subtitle">Saldos atuais</p>
                 </div>
                 <button class="btn-text-action" onclick="switchView('accounts')">Ver Todas &rarr;</button>
               </div>
@@ -313,16 +319,16 @@
               </div>
             </div>
 
-            <!-- Bloco de FIIs Resumo -->
+            <!-- Bloco de Cartões Resumo -->
             <div class="dash-block">
               <div class="block-header">
                 <div>
-                  <h3 class="block-title">Fundos Imobiliários (FIIs)</h3>
-                  <p class="block-subtitle">Aportes e rendimentos passivos</p>
+                  <h3 class="block-title">Cartões de Crédito</h3>
+                  <p class="block-subtitle">Faturas e limites</p>
                 </div>
-                <button class="btn-text-action" onclick="switchView('fiis')">Ver Carteira &rarr;</button>
+                <button class="btn-text-action" onclick="switchView('cards')">Ver Cartões &rarr;</button>
               </div>
-              <div class="dash-fiis-preview-grid" id="dashFiisPreview">
+              <div class="dash-accounts-preview-grid" id="dashCardsPreview">
                 <!-- Injetado dinamicamente -->
               </div>
             </div>
@@ -333,7 +339,7 @@
             <div class="block-header">
               <div>
                 <h3 class="block-title">Últimas Movimentações</h3>
-                <p class="block-subtitle">Lançamentos recentes deste mês</p>
+                <p class="block-subtitle">Lançamentos reais deste mês</p>
               </div>
               <div class="block-actions">
                 <button class="btn-text-action" onclick="switchView('transactions')">Ver Extrato Completo &rarr;</button>
@@ -345,7 +351,7 @@
                   <tr>
                     <th>Data</th>
                     <th>Descrição</th>
-                    <th>Conta / Cartão</th>
+                    <th>Origem (Conta ou Cartão)</th>
                     <th>Finalidade</th>
                     <th>Categoria</th>
                     <th>Valor</th>
@@ -362,14 +368,14 @@
         </section>
 
         <!-- ========================================== -->
-        <!-- VIEW 2: CONTAS BANCÁRIAS & CARTÕES -->
+        <!-- VIEW 2: CONTAS BANCÁRIAS -->
         <!-- ========================================== -->
         <section class="view-panel" id="view-accounts">
           
           <div class="view-header-bar">
             <div>
-              <h2 class="view-title">Contas Bancárias & Cartões</h2>
-              <p class="view-subtitle">Cadastre e acompanhe a evolução do saldo de cada conta nos diversos bancos.</p>
+              <h2 class="view-title">Contas Bancárias</h2>
+              <p class="view-subtitle">Cadastre e acompanhe o saldo de cada conta nos diversos bancos (Corrente, Poupança, Investimentos ou Dinheiro).</p>
             </div>
             <div class="view-actions-group">
               <button class="btn-secondary" onclick="openPurposeManagerModal()">
@@ -378,7 +384,7 @@
               </button>
               <button class="btn-primary" onclick="openNewAccountModal()">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                <span>Nova Conta</span>
+                <span>Nova Conta Bancária</span>
               </button>
             </div>
           </div>
@@ -396,10 +402,6 @@
             <div class="acc-summary-card">
               <span class="acc-sum-label">Contas PESSOAL</span>
               <span class="acc-sum-val color-emerald" id="accTotalPessoal">R$ 0,00</span>
-            </div>
-            <div class="acc-summary-card">
-              <span class="acc-sum-label">Faturas de Cartões</span>
-              <span class="acc-sum-val color-expense" id="accTotalCards">R$ 0,00</span>
             </div>
           </div>
 
@@ -419,8 +421,8 @@
           <div class="dash-block mt-4">
             <div class="block-header">
               <div>
-                <h3 class="block-title">Histórico de Ajustes de Saldo & Conciliações</h3>
-                <p class="block-subtitle">Registro de alterações e evolução dos saldos das suas contas</p>
+                <h3 class="block-title">Histórico Real de Ajustes de Saldo & Conciliações</h3>
+                <p class="block-subtitle">Registro cronológico das alterações e evolução dos saldos das suas contas</p>
               </div>
             </div>
             <div class="table-responsive">
@@ -446,19 +448,104 @@
         </section>
 
         <!-- ========================================== -->
+        <!-- VIEW: CARTÕES DE CRÉDITO (AMBIENTE DEDICADO) -->
+        <!-- ========================================== -->
+        <section class="view-panel" id="view-cards">
+          
+          <div class="view-header-bar">
+            <div>
+              <h2 class="view-title">Cartões de Crédito</h2>
+              <p class="view-subtitle">Ambiente dedicado para gerenciar seus cartões, controlar faturas, limites e lançar despesas de cartão.</p>
+            </div>
+            <div class="view-actions-group">
+              <button class="btn-secondary" onclick="openPayInvoiceModal()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Pagar Fatura</span>
+              </button>
+              <button class="btn-secondary" onclick="openNewCardExpenseModal()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                <span>+ Despesa no Cartão</span>
+              </button>
+              <button class="btn-primary" onclick="openNewCreditCardModal()">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                <span>Novo Cartão de Crédito</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Totalizadores de Cartões -->
+          <div class="accounts-summary-bar">
+            <div class="acc-summary-card">
+              <span class="acc-sum-label">Total em Faturas Atuais</span>
+              <span class="acc-sum-val color-expense" id="cardsTotalInvoiceVal">R$ 0,00</span>
+            </div>
+            <div class="acc-summary-card">
+              <span class="acc-sum-label">Limite Total de Crédito</span>
+              <span class="acc-sum-val" id="cardsTotalLimitVal">R$ 0,00</span>
+            </div>
+            <div class="acc-summary-card">
+              <span class="acc-sum-label">Limite Disponível Consolidado</span>
+              <span class="acc-sum-val color-emerald" id="cardsTotalAvailableVal">R$ 0,00</span>
+            </div>
+          </div>
+
+          <!-- Filtro de Finalidade para Cartões -->
+          <div class="filter-pills-row" id="cardsPurposeFilterRow">
+            <button class="pill-filter-btn active" onclick="filterCardsByPurpose('ALL')">Todos os Cartões</button>
+            <button class="pill-filter-btn" onclick="filterCardsByPurpose('casa')">🏡 Cartões CASA</button>
+            <button class="pill-filter-btn" onclick="filterCardsByPurpose('pessoal')">👤 Cartões PESSOAL</button>
+          </div>
+
+          <!-- Grid de Cartões -->
+          <div class="accounts-cards-grid" id="creditCardsGrid">
+            <!-- Injetado dinamicamente -->
+          </div>
+
+          <!-- Extrato de Compras no Cartão -->
+          <div class="dash-block mt-4">
+            <div class="block-header">
+              <div>
+                <h3 class="block-title">Extrato de Despesas em Cartão de Crédito</h3>
+                <p class="block-subtitle">Histórico de compras e gastos lançados em cada cartão</p>
+              </div>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Data</th>
+                    <th>Cartão</th>
+                    <th>Descrição</th>
+                    <th>Categoria</th>
+                    <th>Finalidade</th>
+                    <th>Valor</th>
+                    <th>Status</th>
+                    <th>Ações</th>
+                  </tr>
+                </thead>
+                <tbody id="cardTransactionsTableBody">
+                  <!-- Injetado dinamicamente -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </section>
+
+        <!-- ========================================== -->
         <!-- VIEW 3: FIIs & INVESTIMENTOS -->
         <!-- ========================================== -->
         <section class="view-panel" id="view-fiis">
           
           <div class="view-header-bar">
             <div>
-              <h2 class="view-title">Carteira de Fundos Imobiliários (FIIs)</h2>
-              <p class="view-subtitle">Acompanhe suas cotas, preço médio, cotação atual e proventos mensais.</p>
+              <h2 class="view-title">Fundos Imobiliários (FIIs) & Investimentos</h2>
+              <p class="view-subtitle">Cadastre o saldo atual do seu FII e acompanhe sua evolução e proventos de forma simples e direta.</p>
             </div>
             <div class="view-actions-group">
               <button class="btn-primary" onclick="openNewFiiModal()">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                <span>Cadastrar FII</span>
+                <span>+ Cadastrar FII</span>
               </button>
             </div>
           </div>
@@ -466,34 +553,34 @@
           <!-- Métricas da Carteira FII -->
           <div class="fiis-metrics-grid">
             <div class="fii-metric-card">
-              <span class="fii-metric-label">Patrimônio Atual em FIIs</span>
+              <span class="fii-metric-label">Patrimônio Total em FIIs</span>
               <span class="fii-metric-val" id="fiiTotalCurrentVal">R$ 0,00</span>
-              <span class="fii-metric-sub" id="fiiTotalInvestedDiff">Investido: R$ 0,00</span>
+              <span class="fii-metric-sub">Soma dos saldos atuais cadastrados</span>
             </div>
 
             <div class="fii-metric-card">
-              <span class="fii-metric-label">Lucro / Prejuízo Total</span>
-              <span class="fii-metric-val" id="fiiProfitLossVal">R$ 0,00</span>
-              <span class="fii-metric-sub" id="fiiProfitLossPct">+0.00%</span>
-            </div>
-
-            <div class="fii-metric-card">
-              <span class="fii-metric-label">Renda Mensal Estimada (Dividendos)</span>
+              <span class="fii-metric-label">Proventos no Mês</span>
               <span class="fii-metric-val color-emerald" id="fiiMonthlyDividends">R$ 0,00</span>
-              <span class="fii-metric-sub">Renda passiva média por mês</span>
+              <span class="fii-metric-sub">Renda passiva mensal informada</span>
             </div>
 
             <div class="fii-metric-card">
-              <span class="fii-metric-label">Dividend Yield Médio da Carteira</span>
+              <span class="fii-metric-label">Dividend Yield Médio</span>
               <span class="fii-metric-val color-brand" id="fiiAverageYield">0.00% a.m.</span>
               <span class="fii-metric-sub" id="fiiAnnualizedYield">~0.00% ao ano</span>
+            </div>
+
+            <div class="fii-metric-card">
+              <span class="fii-metric-label">Fundos Cadastrados</span>
+              <span class="fii-metric-val" id="fiiTotalCountDisplay">0</span>
+              <span class="fii-metric-sub">Ativos acompanhados</span>
             </div>
           </div>
 
           <!-- Tabela Completa de FIIs -->
           <div class="dash-block mt-4">
             <div class="block-header">
-              <h3 class="block-title">Seus Ativos em FIIs</h3>
+              <h3 class="block-title">Seus Fundos Imobiliários</h3>
               <div class="table-search-box">
                 <input type="text" id="fiisSearchInput" placeholder="Filtrar por código ou segmento..." oninput="handleFiiSearch(this.value)">
               </div>
@@ -502,17 +589,12 @@
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>Ticker</th>
+                    <th>Código / FII</th>
                     <th>Segmento</th>
-                    <th>Cotas</th>
-                    <th>Preço Médio</th>
-                    <th>Cotação Atual</th>
-                    <th>Total Investido</th>
-                    <th>Valor Atual</th>
-                    <th>Rentabilidade</th>
-                    <th>Último Provento</th>
-                    <th>Renda Mensal</th>
-                    <th>DY Mensal</th>
+                    <th>Saldo Atual no FII</th>
+                    <th>Proventos do Mês</th>
+                    <th>Finalidade</th>
+                    <th>DY Estimado</th>
                     <th>Ações</th>
                   </tr>
                 </thead>
@@ -527,8 +609,8 @@
           <div class="dashboard-charts-grid mt-4">
             <div class="chart-box">
               <div class="chart-header">
-                <h3 class="chart-title">Alocação por FII</h3>
-                <p class="chart-subtitle">Percentual de participação de cada fundo</p>
+                <h3 class="chart-title">Distribuição por FII</h3>
+                <p class="chart-subtitle">Participação de cada fundo no seu patrimônio</p>
               </div>
               <div class="chart-canvas-container doughnut-chart">
                 <canvas id="chartFiiAllocation"></canvas>
@@ -537,7 +619,7 @@
             <div class="chart-box">
               <div class="chart-header">
                 <h3 class="chart-title">Alocação por Segmento</h3>
-                <p class="chart-subtitle">Diversificação entre Papel, Tijolo, Shopping, etc.</p>
+                <p class="chart-subtitle">Diversificação entre Papel, Logística, Shopping, etc.</p>
               </div>
               <div class="chart-canvas-container doughnut-chart">
                 <canvas id="chartFiiSegment"></canvas>
@@ -583,9 +665,9 @@
             </div>
 
             <div class="filter-field">
-              <label>Conta / Cartão:</label>
+              <label>Origem (Conta / Cartão):</label>
               <select id="txAccountFilter" onchange="applyTransactionFilters()">
-                <option value="ALL">Todas as Contas</option>
+                <option value="ALL">Todas as Origens</option>
                 <!-- Preenchido via JS -->
               </select>
             </div>
@@ -624,7 +706,7 @@
                     <th>Data</th>
                     <th>Tipo</th>
                     <th>Descrição</th>
-                    <th>Conta / Cartão</th>
+                    <th>Conta ou Cartão</th>
                     <th>Finalidade</th>
                     <th>Categoria</th>
                     <th>Valor</th>
@@ -639,7 +721,7 @@
             </div>
             <div class="empty-state hidden" id="emptyTransactionsState">
               <p>Nenhum lançamento encontrado para os filtros selecionados.</p>
-              <button class="btn-secondary" onclick="openNewTransactionModal()">+ Adicionar Primeiro Lançamento</button>
+              <button class="btn-secondary" onclick="openNewTransactionModal()">+ Adicionar Lançamento</button>
             </div>
           </div>
 
@@ -653,7 +735,7 @@
           <div class="view-header-bar">
             <div>
               <h2 class="view-title">Evolução Histórica & Tendências</h2>
-              <p class="view-subtitle">Acompanhe o crescimento patrimonial e a relação entre receitas, despesas e proventos.</p>
+              <p class="view-subtitle">Gráficos 100% reais baseados no seu histórico de saldo e lançamentos.</p>
             </div>
           </div>
 
@@ -662,7 +744,7 @@
               <div class="chart-header">
                 <div>
                   <h3 class="chart-title">Evolução do Saldo por Conta Bancária</h3>
-                  <p class="chart-subtitle">Histórico de cada conta ao longo dos últimos meses</p>
+                  <p class="chart-subtitle">Histórico real de conciliações e ajustes cadastrados por conta</p>
                 </div>
               </div>
               <div class="chart-canvas-container large-chart">
@@ -673,8 +755,8 @@
             <div class="chart-box">
               <div class="chart-header">
                 <div>
-                  <h3 class="chart-title">Receitas vs Despesas (Últimos 6 Meses)</h3>
-                  <p class="chart-subtitle">Comparativo mensal de fluxo de caixa</p>
+                  <h3 class="chart-title">Receitas vs Despesas Reais</h3>
+                  <p class="chart-subtitle">Comparativo real mensal das suas entradas e saídas</p>
                 </div>
               </div>
               <div class="chart-canvas-container">
@@ -685,12 +767,12 @@
             <div class="chart-box">
               <div class="chart-header">
                 <div>
-                  <h3 class="chart-title">Evolução de Proventos de FIIs</h3>
-                  <p class="chart-subtitle">Crescimento da sua renda passiva mensal</p>
+                  <h3 class="chart-title">Evolução do Patrimônio Líquido</h3>
+                  <p class="chart-subtitle">Crescimento real consolidado</p>
                 </div>
               </div>
               <div class="chart-canvas-container">
-                <canvas id="chartDividendsEvolution"></canvas>
+                <canvas id="chartNetWorthEvolutionSecond"></canvas>
               </div>
             </div>
           </div>
@@ -705,7 +787,7 @@
           <div class="view-header-bar">
             <div>
               <h2 class="view-title">Configurações & Google Drive</h2>
-              <p class="view-subtitle">Conecte sua conta do Google para ter seu banco de dados 100% gratuito e acessível no celular.</p>
+              <p class="view-subtitle">Conecte sua conta do Google para ter seu banco de dados 100% gratuito, seguro e acessível no celular.</p>
             </div>
           </div>
 
@@ -721,7 +803,7 @@
               </div>
               <div>
                 <h3 class="settings-card-title">Banco de Dados no seu Google Drive</h3>
-                <p class="settings-card-subtitle">Seus dados são salvos em um arquivo seguro no seu próprio Google Drive através de um Google Apps Script gratuito.</p>
+                <p class="settings-card-subtitle">Seus dados são salvos em um arquivo seguro (<code>FinanceFlow_Database.json</code>) no seu próprio Google Drive.</p>
               </div>
             </div>
 
@@ -731,12 +813,15 @@
                 <input type="url" id="settingsDriveUrl" placeholder="https://script.google.com/macros/s/.../exec">
                 <button class="btn-secondary" onclick="testDriveConnection()">Testar Conexão</button>
               </div>
-              <p class="input-hint">Cole aqui o link gerado na implantação do Apps Script. Seus dados nunca passam por servidores de terceiros!</p>
+              <p class="input-hint">Cole aqui o link gerado na implantação do Apps Script (termina em /exec).</p>
             </div>
 
             <div class="gdrive-form-group" style="margin-top: 14px;">
               <label for="settingsDriveToken">Chave de Segurança / Senha do Backend (Opcional):</label>
-              <input type="password" id="settingsDriveToken" placeholder="Deixe em branco ou digite a senha configurada no script" style="background: var(--bg-input); border: 1px solid var(--border-medium); border-radius: var(--radius-md); padding: 10px 14px; color: #fff; font-size: 0.9rem; width: 100%;">
+              <div style="position: relative; display: flex; align-items: center;">
+                <input type="password" id="settingsDriveToken" placeholder="Deixe em branco ou digite a senha configurada no script" style="width: 100%; padding-right: 44px;">
+                <button type="button" class="btn-icon-sm" onclick="togglePasswordVisibility('settingsDriveToken')" style="position: absolute; right: 8px;" title="Mostrar/Ocultar senha">👁️</button>
+              </div>
               <p class="input-hint">🔒 Camada extra de blindagem: se você definiu uma senha no script, informe-a aqui para autorizar o acesso.</p>
             </div>
 
@@ -779,8 +864,8 @@
           <div class="settings-card mt-4">
             <div class="card-head-between">
               <div>
-                <h3 class="settings-card-title">Definições de Finalidade das Contas</h3>
-                <p class="settings-card-subtitle">Defina para onde vai o dinheiro de cada conta bancária (ex: CASA, PESSOAL, EMPRESA, VIAGENS).</p>
+                <h3 class="settings-card-title">Definições de Finalidade das Contas e Cartões</h3>
+                <p class="settings-card-subtitle">Classifique seus gastos entre CASA, PESSOAL ou crie novas categorias (ex: EMPRESA, VIAGEM, FILHOS).</p>
               </div>
               <button class="btn-secondary" onclick="openNewPurposeModal()">+ Nova Finalidade</button>
             </div>
@@ -792,8 +877,8 @@
 
           <!-- BACKUP, RESTAURAÇÃO E DEMO DATA -->
           <div class="settings-card mt-4">
-            <h3 class="settings-card-title">Backup Local e Dados de Teste</h3>
-            <p class="settings-card-subtitle">Exporte seus dados em arquivo JSON a qualquer momento ou carregue dados de demonstração para testar o sistema.</p>
+            <h3 class="settings-card-title">Backup Local e Dados</h3>
+            <p class="settings-card-subtitle">Exporte seus dados em arquivo JSON a qualquer momento ou zere para começar do zero absoluto.</p>
             
             <div class="backup-buttons-row">
               <button class="btn-secondary" onclick="exportDataAsJSON()">
@@ -806,11 +891,6 @@
                 <span>Restaurar Backup (JSON)</span>
                 <input type="file" id="importJsonFileInput" accept=".json" onchange="importDataFromJSON(event)" style="display:none">
               </label>
-
-              <button class="btn-secondary" onclick="loadSampleDemoData()">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-                <span>Carregar Dados Demonstrativos</span>
-              </button>
 
               <button class="btn-danger-ghost" onclick="confirmResetAllData()">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
@@ -826,23 +906,27 @@
       <!-- BOTTOM NAVIGATION BAR (FOR MOBILE SMARTPHONES) -->
       <nav class="mobile-bottom-nav">
         <button class="mobile-nav-item active" data-view="dashboard" onclick="switchView('dashboard')">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
           <span>Início</span>
         </button>
         <button class="mobile-nav-item" data-view="accounts" onclick="switchView('accounts')">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>
           <span>Contas</span>
+        </button>
+        <button class="mobile-nav-item" data-view="cards" onclick="switchView('cards')">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/><circle cx="7" cy="15" r="1.5"/><circle cx="11" cy="15" r="1.5"/></svg>
+          <span>Cartões</span>
         </button>
         <!-- Floating Center Action Button on Mobile -->
         <button class="mobile-center-add" onclick="openNewTransactionModal()" title="Adicionar Lançamento">
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         </button>
         <button class="mobile-nav-item" data-view="fiis" onclick="switchView('fiis')">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M3 10h18M5 6l7-3 7 3M4 10v11M20 10v11M8 14v4M12 14v4M16 14v4"/></svg>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M3 10h18M5 6l7-3 7 3M4 10v11M20 10v11M8 14v4M12 14v4M16 14v4"/></svg>
           <span>FIIs</span>
         </button>
         <button class="mobile-nav-item" data-view="transactions" onclick="switchView('transactions')">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 16 4 4 4-4M7 20V4M21 8l-4-4-4 4M17 4v16"/></svg>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 16 4 4 4-4M7 20V4M21 8l-4-4-4 4M17 4v16"/></svg>
           <span>Extrato</span>
         </button>
       </nav>
@@ -867,7 +951,7 @@
           <div class="form-grid">
             <div class="form-group full-col">
               <label for="accFormName">Nome da Conta / Banco *</label>
-              <input type="text" id="accFormName" required placeholder="Ex: Nubank Principal, Itaú Salário, Inter Casa...">
+              <input type="text" id="accFormName" required placeholder="Ex: Nubank Corrente, Itaú Salário, Inter Reserva...">
             </div>
 
             <div class="form-group">
@@ -890,11 +974,10 @@
 
             <div class="form-group">
               <label for="accFormType">Tipo de Conta *</label>
-              <select id="accFormType" required onchange="handleAccountTypeChange(this.value)">
+              <select id="accFormType" required>
                 <option value="checking">Conta Corrente</option>
-                <option value="credit">Cartão de Crédito</option>
                 <option value="savings">Conta Poupança / Reserva</option>
-                <option value="investment">Conta de Investimento</option>
+                <option value="investment">Conta de Investimentos</option>
                 <option value="cash">Dinheiro em Espécie</option>
               </select>
             </div>
@@ -912,27 +995,9 @@
             </div>
 
             <div class="form-group full-col" id="balanceFieldContainer">
-              <label for="accFormBalance">Saldo Inicial / Atual (R$) *</label>
+              <label for="accFormBalance">Saldo Inicial da Conta (R$) *</label>
               <input type="number" step="0.01" id="accFormBalance" required value="0.00" placeholder="0,00">
               <small class="field-hint">Você poderá ajustar e registrar a evolução do saldo a qualquer momento.</small>
-            </div>
-
-            <!-- Campos específicos para Cartão de Crédito -->
-            <div class="form-group credit-fields hidden" id="creditLimitGroup">
-              <label for="accFormCreditLimit">Limite do Cartão (R$)</label>
-              <input type="number" step="0.01" id="accFormCreditLimit" placeholder="Ex: 5000.00">
-            </div>
-            <div class="form-group credit-fields hidden" id="creditInvoiceGroup">
-              <label for="accFormCurrentInvoice">Fatura Atual a Vencer (R$)</label>
-              <input type="number" step="0.01" id="accFormCurrentInvoice" placeholder="Ex: 1250.00">
-            </div>
-            <div class="form-group credit-fields hidden" id="creditClosingGroup">
-              <label for="accFormClosingDay">Dia de Fechamento</label>
-              <input type="number" min="1" max="31" id="accFormClosingDay" placeholder="Ex: 25">
-            </div>
-            <div class="form-group credit-fields hidden" id="creditDueGroup">
-              <label for="accFormDueDay">Dia de Vencimento</label>
-              <input type="number" min="1" max="31" id="accFormDueDay" placeholder="Ex: 5">
             </div>
           </div>
         </div>
@@ -944,7 +1009,125 @@
     </div>
   </div>
 
-  <!-- MODAL: AJUSTE DE SALDO (HISTÓRICO E CONCILIAÇÃO) -->
+  <!-- MODAL: CADASTRAR / EDITAR CARTÃO DE CRÉDITO -->
+  <div class="modal-overlay" id="modalCreditCard">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title" id="modalCreditCardTitle">Cadastrar Cartão de Crédito</h3>
+        <button class="btn-close-modal" onclick="closeModal('modalCreditCard')">&times;</button>
+      </div>
+      <form id="formCreditCard" onsubmit="handleCreditCardFormSubmit(event)">
+        <input type="hidden" id="cardFormId">
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="form-group full-col">
+              <label for="cardFormName">Nome do Cartão *</label>
+              <input type="text" id="cardFormName" required placeholder="Ex: Nubank Ultravioleta, Itaú Click, Inter Black...">
+            </div>
+
+            <div class="form-group">
+              <label for="cardFormBank">Banco / Emissor</label>
+              <select id="cardFormBank" onchange="handleCardPresetChange(this.value)">
+                <option value="Nubank">Nubank</option>
+                <option value="Itaú">Itaú</option>
+                <option value="Inter">Inter</option>
+                <option value="Bradesco">Bradesco</option>
+                <option value="Santander">Santander</option>
+                <option value="Banco do Brasil">Banco do Brasil</option>
+                <option value="Caixa">Caixa</option>
+                <option value="C6 Bank">C6 Bank</option>
+                <option value="XP Investimentos">XP Investimentos</option>
+                <option value="BTG Pactual">BTG Pactual</option>
+                <option value="Outro">Outro</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="cardFormPurpose">Finalidade *</label>
+              <select id="cardFormPurpose" required>
+                <!-- Preenchido via JS (CASA / PESSOAL) -->
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="cardFormLimit">Limite Total de Crédito (R$) *</label>
+              <input type="number" step="0.01" id="cardFormLimit" required placeholder="Ex: 5000.00">
+            </div>
+
+            <div class="form-group">
+              <label for="cardFormInvoice">Fatura Atual Inicial (R$)</label>
+              <input type="number" step="0.01" id="cardFormInvoice" value="0.00" placeholder="0.00">
+              <small class="field-hint">Quanto você tem a pagar nesta fatura no momento</small>
+            </div>
+
+            <div class="form-group">
+              <label for="cardFormClosing">Dia de Fechamento da Fatura</label>
+              <input type="number" min="1" max="31" id="cardFormClosing" placeholder="Ex: 24">
+            </div>
+
+            <div class="form-group">
+              <label for="cardFormDue">Dia de Vencimento da Fatura</label>
+              <input type="number" min="1" max="31" id="cardFormDue" placeholder="Ex: 1">
+            </div>
+
+            <div class="form-group full-col">
+              <label for="cardFormColor">Cor do Cartão</label>
+              <input type="color" id="cardFormColor" value="#820ad1">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn-secondary" onclick="closeModal('modalCreditCard')">Cancelar</button>
+          <button type="submit" class="btn-primary">Salvar Cartão</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: PAGAR FATURA DO CARTÃO -->
+  <div class="modal-overlay" id="modalPayInvoice">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">Pagar Fatura de Cartão</h3>
+        <button class="btn-close-modal" onclick="closeModal('modalPayInvoice')">&times;</button>
+      </div>
+      <form id="formPayInvoice" onsubmit="handlePayInvoiceSubmit(event)">
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="form-group full-col">
+              <label for="payInvoiceCard">Qual Cartão de Crédito? *</label>
+              <select id="payInvoiceCard" required onchange="handlePayInvoiceCardChange(this.value)">
+                <!-- Preenchido via JS -->
+              </select>
+            </div>
+
+            <div class="form-group full-col">
+              <label for="payInvoiceAmount">Valor a Pagar (R$) *</label>
+              <input type="number" step="0.01" id="payInvoiceAmount" required placeholder="0.00">
+            </div>
+
+            <div class="form-group full-col">
+              <label for="payInvoiceAccount">Debitar de qual Conta Bancária? *</label>
+              <select id="payInvoiceAccount" required>
+                <!-- Lista de contas bancárias -->
+              </select>
+            </div>
+
+            <div class="form-group full-col">
+              <label for="payInvoiceDate">Data do Pagamento *</label>
+              <input type="date" id="payInvoiceDate" required>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn-secondary" onclick="closeModal('modalPayInvoice')">Cancelar</button>
+          <button type="submit" class="btn-primary">Confirmar Pagamento da Fatura</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: AJUSTE DE SALDO DE CONTA (HISTÓRICO E CONCILIAÇÃO) -->
   <div class="modal-overlay" id="modalAdjustBalance">
     <div class="modal-dialog">
       <div class="modal-header">
@@ -957,10 +1140,8 @@
           <div class="adjust-preview-box">
             <span class="adjust-acc-name" id="adjustAccNameDisplay">Conta Selecionada</span>
             <div class="adjust-balance-row">
-              <div>
-                <span class="sub-label">Saldo Anterior Registrado:</span>
-                <span class="old-balance-val" id="adjustAccOldBalanceDisplay">R$ 0,00</span>
-              </div>
+              <span class="sub-label">Saldo Anterior Registrado:</span>
+              <span class="old-balance-val" id="adjustAccOldBalanceDisplay">R$ 0,00</span>
             </div>
           </div>
 
@@ -977,13 +1158,50 @@
 
             <div class="form-group full-col">
               <label for="adjustReason">Motivo do Ajuste / Observação *</label>
-              <input type="text" id="adjustReason" required placeholder="Ex: Conciliação bancária mensal, rendimento de conta, conferência...">
+              <input type="text" id="adjustReason" required placeholder="Ex: Conciliação mensal, rendimento de conta, conferência...">
             </div>
           </div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn-secondary" onclick="closeModal('modalAdjustBalance')">Cancelar</button>
           <button type="submit" class="btn-primary">Confirmar Ajuste</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: AJUSTE DE SALDO DO FII -->
+  <div class="modal-overlay" id="modalAdjustFii">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">Ajustar Saldo do FII</h3>
+        <button class="btn-close-modal" onclick="closeModal('modalAdjustFii')">&times;</button>
+      </div>
+      <form id="formAdjustFii" onsubmit="handleAdjustFiiSubmit(event)">
+        <input type="hidden" id="adjustFiiId">
+        <div class="modal-body">
+          <div class="adjust-preview-box">
+            <span class="adjust-acc-name" id="adjustFiiNameDisplay">FII</span>
+            <div class="adjust-balance-row">
+              <span class="sub-label">Saldo Anterior Registrado:</span>
+              <span class="old-balance-val" id="adjustFiiOldBalanceDisplay">R$ 0,00</span>
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <div class="form-group full-col">
+              <label for="adjustFiiNewBalance">Novo Saldo Atual no FII (R$) *</label>
+              <input type="number" step="0.01" id="adjustFiiNewBalance" required placeholder="Digite o novo saldo atual investido">
+            </div>
+            <div class="form-group full-col">
+              <label for="adjustFiiDate">Data do Ajuste *</label>
+              <input type="date" id="adjustFiiDate" required>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn-secondary" onclick="closeModal('modalAdjustFii')">Cancelar</button>
+          <button type="submit" class="btn-primary">Atualizar Saldo</button>
         </div>
       </form>
     </div>
@@ -1016,6 +1234,21 @@
           </div>
 
           <div class="form-grid mt-3">
+            <!-- Origem do Gasto: Escolha rápida se é Conta Bancária ou Cartão de Crédito -->
+            <div class="form-group full-col" id="txOriginTypeContainer">
+              <label>Onde ocorreu o lançamento? *</label>
+              <div class="type-selector-tabs" style="background: rgba(255,255,255,0.02);">
+                <label class="type-tab-btn active" id="tabOriginAccount" style="font-size: 0.8rem;">
+                  <input type="radio" name="txOriginType" value="account" checked onchange="handleOriginTypeRadioChange('account')">
+                  <span>🏦 Conta Bancária / Pix / Dinheiro</span>
+                </label>
+                <label class="type-tab-btn" id="tabOriginCard" style="font-size: 0.8rem;">
+                  <input type="radio" name="txOriginType" value="card" onchange="handleOriginTypeRadioChange('card')">
+                  <span>💳 Cartão de Crédito</span>
+                </label>
+              </div>
+            </div>
+
             <div class="form-group full-col">
               <label for="txFormDesc">Descrição *</label>
               <input type="text" id="txFormDesc" required placeholder="Ex: Supermercado, Aluguel, Salário, Internet...">
@@ -1035,7 +1268,7 @@
             <div class="form-group" id="txAccountGroup">
               <label for="txFormAccount" id="txAccountLabel">Conta ou Cartão *</label>
               <select id="txFormAccount" required onchange="handleTxAccountChange(this.value)">
-                <!-- Preenchido via JS com contas e cartões cadastrados -->
+                <!-- Preenchido via JS -->
               </select>
             </div>
 
@@ -1078,7 +1311,7 @@
     </div>
   </div>
 
-  <!-- MODAL: NOVO / EDITAR FII (FUNDO IMOBILIÁRIO) -->
+  <!-- MODAL: NOVO / EDITAR FII (FUNDO IMOBILIÁRIO - SIMPLIFICADO) -->
   <div class="modal-overlay" id="modalFii">
     <div class="modal-dialog">
       <div class="modal-header">
@@ -1089,49 +1322,40 @@
         <input type="hidden" id="fiiFormId">
         <div class="modal-body">
           <div class="form-grid">
-            <div class="form-group">
-              <label for="fiiFormTicker">Código / Ticker *</label>
-              <input type="text" id="fiiFormTicker" required placeholder="Ex: MXRF11, HGLG11, XPML11" style="text-transform:uppercase;">
-            </div>
-
-            <div class="form-group">
-              <label for="fiiFormSegment">Segmento do FII *</label>
-              <select id="fiiFormSegment" required>
-                <option value="Papel / CRI">Papel / CRI</option>
-                <option value="Tijolo - Logística">Tijolo - Logística</option>
-                <option value="Tijolo - Shopping">Tijolo - Shopping</option>
-                <option value="Tijolo - Lajes Corp.">Tijolo - Lajes Corporativas</option>
-                <option value="Híbrido / FoF">Híbrido / FoF</option>
-                <option value="Fiagro">Fiagro</option>
-                <option value="Outros">Outros</option>
-              </select>
-            </div>
-
-            <div class="form-group">
-              <label for="fiiFormShares">Quantidade de Cotas *</label>
-              <input type="number" step="1" min="1" id="fiiFormShares" required placeholder="Ex: 100">
-            </div>
-
-            <div class="form-group">
-              <label for="fiiFormAvgPrice">Preço Médio Pago (R$) *</label>
-              <input type="number" step="0.01" id="fiiFormAvgPrice" required placeholder="Ex: 10.25">
-            </div>
-
-            <div class="form-group">
-              <label for="fiiFormCurrentPrice">Cotação Atual de Mercado (R$) *</label>
-              <input type="number" step="0.01" id="fiiFormCurrentPrice" required placeholder="Ex: 10.50">
-            </div>
-
-            <div class="form-group">
-              <label for="fiiFormLastDividend">Último Provento por Cota (R$)</label>
-              <input type="number" step="0.001" id="fiiFormLastDividend" placeholder="Ex: 0.10">
-              <small class="field-hint">Usado para calcular sua renda passiva mensal estimada</small>
+            <div class="form-group full-col">
+              <label for="fiiFormTicker">Código / Ticker ou Nome do FII *</label>
+              <input type="text" id="fiiFormTicker" required placeholder="Ex: MXRF11, HGLG11, XPML11..." style="text-transform:uppercase;">
             </div>
 
             <div class="form-group full-col">
-              <label for="fiiFormCustodian">Corretora / Banco de Custódia</label>
-              <select id="fiiFormCustodian">
-                <!-- Lista de contas de investimentos cadastradas ou texto -->
+              <label for="fiiFormBalance" style="color: #38bdf8; font-weight: 700;">Saldo que Tenho no Momento no FII (R$) *</label>
+              <input type="number" step="0.01" id="fiiFormBalance" required placeholder="Ex: 5000.00" style="border-color: rgba(6,182,212,0.4); font-size: 1.1rem; font-weight: 700;">
+              <small class="field-hint">Basta informar o saldo total investido neste FII no momento.</small>
+            </div>
+
+            <div class="form-group">
+              <label for="fiiFormLastDividend">Proventos Recebidos no Mês (R$)</label>
+              <input type="number" step="0.01" id="fiiFormLastDividend" placeholder="Ex: 45.00">
+              <small class="field-hint">Opcional: quanto recebeu de dividendos</small>
+            </div>
+
+            <div class="form-group">
+              <label for="fiiFormSegment">Segmento do FII</label>
+              <select id="fiiFormSegment">
+                <option value="Papel / CRI">Papel / CRI</option>
+                <option value="Tijolo - Logística">Tijolo - Logística</option>
+                <option value="Tijolo - Shopping">Tijolo - Shopping</option>
+                <option value="Tijolo - Lajes Corp.">Tijolo - Lajes Corp.</option>
+                <option value="Híbrido / FoF">Híbrido / FoF</option>
+                <option value="Fiagro">Fiagro</option>
+                <option value="Geral">Geral / Outro</option>
+              </select>
+            </div>
+
+            <div class="form-group full-col">
+              <label for="fiiFormPurpose">Finalidade</label>
+              <select id="fiiFormPurpose">
+                <!-- Preenchido via JS (CASA / PESSOAL) -->
               </select>
             </div>
           </div>
@@ -1148,7 +1372,7 @@
   <div class="modal-overlay" id="modalPurposes">
     <div class="modal-dialog">
       <div class="modal-header">
-        <h3 class="modal-title">Definições de Finalidade das Contas</h3>
+        <h3 class="modal-title">Definições de Finalidade das Contas e Cartões</h3>
         <button class="btn-close-modal" onclick="closeModal('modalPurposes')">&times;</button>
       </div>
       <div class="modal-body">
@@ -1173,7 +1397,7 @@
     </div>
   </div>
 
-  <!-- MODAL: CONEXÃO COM GOOGLE DRIVE -->
+  <!-- MODAL: CONEXÃO COM GOOGLE DRIVE (COM CAMPO DE SENHA VISÍVEL) -->
   <div class="modal-overlay" id="modalDrive">
     <div class="modal-dialog">
       <div class="modal-header">
@@ -1192,9 +1416,19 @@
         <div class="form-group mt-3">
           <label for="modalDriveUrlInput">URL do seu Google Apps Script (Web App):</label>
           <input type="url" id="modalDriveUrlInput" placeholder="https://script.google.com/macros/s/.../exec">
+          <small class="field-hint">A URL gerada na implantação que termina em /exec</small>
         </div>
 
-        <div class="modal-quick-actions mt-3">
+        <div class="form-group mt-3">
+          <label for="modalDriveTokenInput">Chave de Segurança / Senha Secreta (Opcional):</label>
+          <div style="position: relative; display: flex; align-items: center;">
+            <input type="password" id="modalDriveTokenInput" placeholder="Deixe em branco ou digite a senha configurada no script" style="width: 100%; padding-right: 44px;">
+            <button type="button" class="btn-icon-sm" onclick="togglePasswordVisibility('modalDriveTokenInput')" style="position: absolute; right: 8px;" title="Mostrar/Ocultar senha">👁️</button>
+          </div>
+          <small class="field-hint">🔒 Se configurou uma senha no script, informe-a aqui para autorizar o acesso.</small>
+        </div>
+
+        <div class="modal-quick-actions mt-4">
           <button class="btn-secondary" onclick="testDriveConnectionFromModal()">Testar Conexão</button>
           <button class="btn-primary" onclick="saveDriveSettingsFromModal()">Salvar & Sincronizar</button>
         </div>

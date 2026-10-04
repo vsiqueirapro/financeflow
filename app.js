@@ -1,9 +1,13 @@
 /**
  * =========================================================================
- * FINANCEFLOW - CORE JAVASCRIPT APPLICATION ENGINE
+ * FINANCEFLOW - CORE JAVASCRIPT APPLICATION ENGINE (V2.0)
  * =========================================================================
- * Sistema completo de controle financeiro pessoal, contas bancárias,
- * FIIs, fluxo de caixa e sincronização em nuvem via Google Drive.
+ * Sistema de controle financeiro com dados 100% reais:
+ * - Contas bancárias
+ * - Cartões de crédito dedicados (limite, fatura e despesas de cartão)
+ * - FIIs simplificados por saldo atual no momento
+ * - Gráficos 100% reais sem dados fictícios
+ * - Sincronização Google Drive com suporte a senha secreta
  * =========================================================================
  */
 
@@ -26,11 +30,12 @@ const BANK_PRESETS = {
 // Initial State Schema
 const DEFAULT_STATE = {
   accounts: [],
+  cards: [],
   fiis: [],
   transactions: [],
   purposes: [
-    { id: 'casa', name: 'CASA', color: '#3b82f6', isDefault: true, description: 'Contas da residência e família' },
-    { id: 'pessoal', name: 'PESSOAL', color: '#10b981', isDefault: true, description: 'Gastos particulares individuais' }
+    { id: 'casa', name: 'CASA', color: '#3b82f6', isDefault: true, description: 'Contas e despesas da residência / família' },
+    { id: 'pessoal', name: 'PESSOAL', color: '#10b981', isDefault: true, description: 'Gastos e contas particulares e individuais' }
   ],
   categories: [
     { id: 'moradia', name: 'Moradia / Aluguel', type: 'expense', icon: '🏠', color: '#6366f1' },
@@ -46,6 +51,7 @@ const DEFAULT_STATE = {
   balanceSnapshots: [],
   settings: {
     driveScriptUrl: '',
+    driveToken: '',
     autoSync: true,
     lastSyncTime: null,
     privacyMode: false,
@@ -54,7 +60,7 @@ const DEFAULT_STATE = {
   }
 };
 
-// Application State
+// Global App Variables
 let appState = null;
 let currentActiveView = 'dashboard';
 let globalSelectedPurpose = 'ALL';
@@ -62,7 +68,7 @@ let chartsInstances = {};
 let syncDebounceTimer = null;
 
 // =========================================================================
-// INITIALIZATION & PERSISTENCE
+// INITIALIZATION & STATE PERSISTENCE
 // =========================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -72,7 +78,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initPWA();
   renderApp();
   
-  // Try background pull from Google Drive if URL is configured
   if (appState.settings.driveScriptUrl) {
     syncWithGoogleDrive('pull', true);
   }
@@ -83,28 +88,68 @@ function initAppState() {
   if (localData) {
     try {
       appState = JSON.parse(localData);
-      // Ensure missing keys exist
+      
+      // Auto-migrate schema
+      if (!appState.cards) appState.cards = [];
+      if (!appState.accounts) appState.accounts = [];
+      if (!appState.fiis) appState.fiis = [];
+      if (!appState.transactions) appState.transactions = [];
       if (!appState.purposes) appState.purposes = DEFAULT_STATE.purposes;
       if (!appState.categories) appState.categories = DEFAULT_STATE.categories;
       if (!appState.balanceSnapshots) appState.balanceSnapshots = [];
       if (!appState.settings) appState.settings = DEFAULT_STATE.settings;
+
+      // Migrate any legacy credit cards in accounts to the dedicated cards array
+      const legacyCreditAccounts = appState.accounts.filter(a => a.type === 'credit');
+      if (legacyCreditAccounts.length > 0) {
+        legacyCreditAccounts.forEach(c => {
+          if (!appState.cards.find(existing => existing.id === c.id)) {
+            appState.cards.push({
+              id: c.id,
+              name: c.name,
+              bank: c.bankPreset || 'Outro',
+              limit: Number(c.creditLimit || 0),
+              invoice: Number(c.currentInvoice || 0),
+              closingDay: c.closingDay || 20,
+              dueDay: c.dueDay || 1,
+              purpose: c.purpose || 'pessoal',
+              color: c.color || '#820ad1'
+            });
+          }
+        });
+        // Remove legacy credit accounts from bank accounts array
+        appState.accounts = appState.accounts.filter(a => a.type !== 'credit');
+      }
+
+      // Migrate legacy FIIs (if they have shares/currentPrice instead of balance)
+      appState.fiis.forEach(f => {
+        if (f.balance === undefined) {
+          f.balance = (Number(f.shares) || 1) * (Number(f.currentPrice) || Number(f.avgPrice) || 0);
+        }
+        if (f.monthlyDividend === undefined) {
+          f.monthlyDividend = (Number(f.shares) || 1) * (Number(f.lastDividend) || 0);
+        }
+      });
+
     } catch (e) {
-      console.error('Error parsing localStorage state:', e);
-      loadSampleDemoData(false);
+      console.error('Error parsing state:', e);
+      appState = JSON.parse(JSON.stringify(DEFAULT_STATE));
     }
   } else {
-    // First run: load initial rich demo data so the user has immediate insights
-    loadSampleDemoData(false);
+    // Start with empty clean state
+    appState = JSON.parse(JSON.stringify(DEFAULT_STATE));
   }
 }
 
 function saveLocalState() {
   localStorage.setItem('financeflow_state', JSON.stringify(appState));
-  
-  // Auto-sync with Google Drive if configured
   if (appState.settings.driveScriptUrl && appState.settings.autoSync) {
     scheduleDriveSync();
   }
+}
+
+function saveLocalStateOnly() {
+  localStorage.setItem('financeflow_state', JSON.stringify(appState));
 }
 
 function scheduleDriveSync() {
@@ -116,8 +161,25 @@ function scheduleDriveSync() {
 }
 
 // =========================================================================
-// GOOGLE DRIVE SYNC ENGINE (GOOGLE APPS SCRIPT)
+// GOOGLE DRIVE SYNC ENGINE (COM SUPORTE A TOKEN DE SEGURANÇA)
 // =========================================================================
+
+function validateDriveUrl(url) {
+  if (!url) return { valid: false, message: 'Por favor, informe a URL do Web App.' };
+  if (url.includes('script.googleusercontent.com')) {
+    return {
+      valid: false,
+      message: 'Atenção: Você colou a URL de redirecionamento temporário (googleusercontent). Volte na aba do Google Apps Script e copie a URL oficial da implantação que termina em "/exec".'
+    };
+  }
+  if (!url.startsWith('https://script.google.com/')) {
+    return {
+      valid: false,
+      message: 'A URL deve começar com "https://script.google.com/macros/s/" e terminar com "/exec".'
+    };
+  }
+  return { valid: true };
+}
 
 async function syncWithGoogleDrive(direction = 'push', isBackground = false) {
   const url = appState.settings.driveScriptUrl ? appState.settings.driveScriptUrl.trim() : '';
@@ -134,6 +196,7 @@ async function syncWithGoogleDrive(direction = 'push', isBackground = false) {
 
   try {
     const token = appState.settings.driveToken || '';
+
     if (direction === 'push') {
       const payload = {
         action: 'save',
@@ -184,26 +247,9 @@ async function syncWithGoogleDrive(direction = 'push', isBackground = false) {
     console.error('Google Drive sync error:', error);
     updateSyncStatus('error');
     if (!isBackground) {
-      showToast(`Erro na sincronização: ${error.message || 'Verifique a URL do script.'}`, 'error');
+      showToast(`Erro na sincronização: ${error.message || 'Verifique a URL e a senha do script.'}`, 'error');
     }
   }
-}
-
-function validateDriveUrl(url) {
-  if (!url) return { valid: false, message: 'Por favor, informe a URL do Web App.' };
-  if (url.includes('script.googleusercontent.com')) {
-    return {
-      valid: false,
-      message: 'Atenção: Você colou o link temporário de redirecionamento (googleusercontent). Volte na aba do Google Apps Script e copie a URL original que começa com "https://script.google.com/macros/s/" e termina em "/exec".'
-    };
-  }
-  if (!url.startsWith('https://script.google.com/')) {
-    return {
-      valid: false,
-      message: 'A URL deve começar com "https://script.google.com/macros/s/" e terminar com "/exec".'
-    };
-  }
-  return { valid: true };
 }
 
 async function testDriveConnection() {
@@ -211,10 +257,9 @@ async function testDriveConnection() {
   const testUrl = urlInput ? urlInput.value.trim() : appState.settings.driveScriptUrl;
   const tokenInput = document.getElementById('settingsDriveToken');
   const token = (tokenInput ? tokenInput.value : (appState.settings.driveToken || '')).trim();
-  
+
   const check = validateDriveUrl(testUrl);
   if (!check.valid) {
-    showToast(check.message, 'error');
     alert(check.message);
     return;
   }
@@ -229,11 +274,12 @@ async function testDriveConnection() {
       showToast('Conexão estabelecida com sucesso com seu Google Drive!', 'success');
       alert('Conexão estabelecida com sucesso com seu Google Drive!');
     } else {
-      showToast(res.message || 'Resposta recebida do Google Drive!', 'info');
-      alert(res.message || 'Resposta recebida do Google Drive!');
+      showToast(res.message || 'Resposta recebida.', 'info');
+      alert(res.message || 'Resposta recebida do Google Drive.');
     }
   } catch (err) {
-    showToast('Não foi possível conectar. Verifique se o script foi implantado como "Qualquer pessoa".', 'error');
+    showToast('Não foi possível conectar. Verifique a URL e se o script foi implantado como "Qualquer pessoa".', 'error');
+    alert('Não foi possível conectar. Verifique a URL e se o script foi implantado como "Qualquer pessoa".');
   }
 }
 
@@ -244,7 +290,6 @@ function saveDriveSettings() {
     const cleanUrl = urlInput.value.trim();
     const check = validateDriveUrl(cleanUrl);
     if (!check.valid) {
-      showToast(check.message, 'error');
       alert(check.message);
       return;
     }
@@ -259,27 +304,35 @@ function saveDriveSettings() {
 }
 
 function testDriveConnectionFromModal() {
-  const input = document.getElementById('modalDriveUrlInput');
-  if (input && input.value) {
-    document.getElementById('settingsDriveUrl').value = input.value;
+  const urlInput = document.getElementById('modalDriveUrlInput');
+  const tokenInput = document.getElementById('modalDriveTokenInput');
+  if (urlInput && urlInput.value) {
+    document.getElementById('settingsDriveUrl').value = urlInput.value;
+    if (tokenInput) document.getElementById('settingsDriveToken').value = tokenInput.value;
     testDriveConnection();
   } else {
-    showToast('Digite a URL primeiro.', 'error');
+    showToast('Digite a URL do script primeiro.', 'error');
   }
 }
 
 function saveDriveSettingsFromModal() {
-  const input = document.getElementById('modalDriveUrlInput');
-  if (input) {
-    const cleanUrl = input.value.trim();
+  const urlInput = document.getElementById('modalDriveUrlInput');
+  const tokenInput = document.getElementById('modalDriveTokenInput');
+  if (urlInput) {
+    const cleanUrl = urlInput.value.trim();
     const check = validateDriveUrl(cleanUrl);
     if (!check.valid) {
-      showToast(check.message, 'error');
       alert(check.message);
       return;
     }
     appState.settings.driveScriptUrl = cleanUrl;
     document.getElementById('settingsDriveUrl').value = cleanUrl;
+
+    if (tokenInput) {
+      appState.settings.driveToken = tokenInput.value.trim();
+      document.getElementById('settingsDriveToken').value = tokenInput.value.trim();
+    }
+
     saveLocalState();
     closeModal('modalDrive');
     showToast('Google Drive conectado! Sincronizando...', 'success');
@@ -287,15 +340,20 @@ function saveDriveSettingsFromModal() {
   }
 }
 
+function togglePasswordVisibility(inputId) {
+  const input = document.getElementById(inputId);
+  if (input) {
+    input.type = input.type === 'password' ? 'text' : 'password';
+  }
+}
+
 function updateSyncStatus(status) {
   const dot = document.getElementById('syncStatusDot');
   const title = document.getElementById('syncStatusTitle');
   const sub = document.getElementById('syncStatusSub');
-  
   if (!dot) return;
 
   dot.className = 'sync-dot';
-
   if (status === 'synced') {
     dot.classList.add('dot-synced');
     if (title) title.textContent = 'Google Drive';
@@ -315,12 +373,8 @@ function updateSyncStatus(status) {
   }
 }
 
-function saveLocalStateOnly() {
-  localStorage.setItem('financeflow_state', JSON.stringify(appState));
-}
-
 // =========================================================================
-// DATE & NAVIGATION
+// NAVIGATION & DATE SELECTOR
 // =========================================================================
 
 function initDateSelectors() {
@@ -360,7 +414,6 @@ function changeMonth(delta) {
 }
 
 function initNavigation() {
-  // Desktop Sidebar
   document.querySelectorAll('.sidebar-nav .nav-item').forEach(btn => {
     btn.addEventListener('click', () => {
       const view = btn.getAttribute('data-view');
@@ -368,7 +421,6 @@ function initNavigation() {
     });
   });
 
-  // Mobile Bottom Nav
   document.querySelectorAll('.mobile-bottom-nav .mobile-nav-item').forEach(btn => {
     btn.addEventListener('click', () => {
       const view = btn.getAttribute('data-view');
@@ -380,25 +432,28 @@ function initNavigation() {
 function switchView(viewName) {
   currentActiveView = viewName;
 
-  // Update panels
   document.querySelectorAll('.view-panel').forEach(p => p.classList.remove('active'));
   const target = document.getElementById(`view-${viewName}`);
   if (target) target.classList.add('active');
 
-  // Update sidebar active buttons
   document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => {
     b.classList.toggle('active', b.getAttribute('data-view') === viewName);
   });
 
-  // Update mobile bottom nav
   document.querySelectorAll('.mobile-bottom-nav .mobile-nav-item').forEach(b => {
     b.classList.toggle('active', b.getAttribute('data-view') === viewName);
   });
 
-  // Trigger charts re-render when switching views
   setTimeout(() => {
     renderCharts();
-  }, 50);
+  }, 60);
+}
+
+function toggleMobileSidebar() {
+  const sidebar = document.getElementById('appSidebar');
+  if (sidebar) {
+    sidebar.style.display = sidebar.style.display === 'flex' ? 'none' : 'flex';
+  }
 }
 
 function handlePurposeFilterChange(value) {
@@ -420,13 +475,14 @@ function renderApp() {
   renderPurposeSelectors();
   renderDashboard();
   renderAccountsView();
+  renderCardsView();
   renderFiisView();
   renderTransactionsView();
   renderCharts();
   renderPurposesSettings();
   updateBadges();
 
-  // Populate Drive settings field if empty
+  // Populate Drive settings fields
   const driveInput = document.getElementById('settingsDriveUrl');
   if (driveInput && appState.settings.driveScriptUrl) {
     driveInput.value = appState.settings.driveScriptUrl;
@@ -439,11 +495,18 @@ function renderApp() {
   if (modalDriveInput && appState.settings.driveScriptUrl) {
     modalDriveInput.value = appState.settings.driveScriptUrl;
   }
+  const modalTokenInput = document.getElementById('modalDriveTokenInput');
+  if (modalTokenInput && appState.settings.driveToken) {
+    modalTokenInput.value = appState.settings.driveToken;
+  }
 }
 
 function updateBadges() {
   const accBadge = document.getElementById('accountsCountBadge');
   if (accBadge) accBadge.textContent = appState.accounts.length;
+
+  const cardBadge = document.getElementById('cardsCountBadge');
+  if (cardBadge) cardBadge.textContent = appState.cards.length;
 
   const fiiBadge = document.getElementById('fiisCountBadge');
   if (fiiBadge) fiiBadge.textContent = appState.fiis.length;
@@ -464,43 +527,37 @@ function formatCurrency(val) {
   return num.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
-function formatPercent(val) {
-  const num = Number(val) || 0;
-  return `${num >= 0 ? '+' : ''}${num.toFixed(2)}%`;
-}
-
 // =========================================================================
-// DASHBOARD RENDERING & KPIS
+// DASHBOARD RENDERING & KPIS REAIS
 // =========================================================================
 
 function renderDashboard() {
   const filteredAccounts = getFilteredAccounts();
+  const filteredCards = getFilteredCards();
   const currentMonth = appState.settings.currentMonth;
   const currentYear = appState.settings.currentYear;
 
-  // 1. Total Bank Balance (Checking, Savings, Cash, Investments)
+  // 1. Total em Bancos
   let totalBankCash = 0;
-  let totalCreditDue = 0;
-
   filteredAccounts.forEach(acc => {
-    if (acc.type === 'credit') {
-      totalCreditDue += Number(acc.currentInvoice || 0);
-    } else {
-      totalBankCash += Number(acc.balance || 0);
-    }
+    totalBankCash += Number(acc.balance || 0);
   });
 
-  // 2. FIIs Total Valuation
+  // 2. Total em Faturas de Cartão
+  let totalCreditDue = 0;
+  filteredCards.forEach(card => {
+    totalCreditDue += Number(card.invoice || 0);
+  });
+
+  // 3. Total em FIIs
   let totalFiisVal = 0;
   let totalMonthlyDividends = 0;
-
   appState.fiis.forEach(fii => {
-    const curVal = (Number(fii.shares) || 0) * (Number(fii.currentPrice) || 0);
-    totalFiisVal += curVal;
-    totalMonthlyDividends += (Number(fii.shares) || 0) * (Number(fii.lastDividend) || 0);
+    totalFiisVal += Number(fii.balance || 0);
+    totalMonthlyDividends += Number(fii.monthlyDividend || 0);
   });
 
-  // 3. Consolidated Net Worth (Contas + FIIs - Cartões de Crédito)
+  // 4. Patrimônio Líquido Geral Consolidado (Contas + FIIs - Faturas a pagar)
   const netWorth = totalBankCash + totalFiisVal - totalCreditDue;
 
   document.getElementById('dashTotalNetWorth').textContent = formatCurrency(netWorth);
@@ -508,7 +565,7 @@ function renderDashboard() {
   document.getElementById('dashTotalFiisBalance').textContent = formatCurrency(totalFiisVal);
   document.getElementById('dashTotalCreditCardsDue').textContent = formatCurrency(totalCreditDue);
 
-  // 4. Month Transactions (Income & Expenses)
+  // 5. Entradas e Saídas do Mês Real
   const monthTransactions = appState.transactions.filter(tx => {
     const txDate = new Date(tx.date);
     const matchesDate = txDate.getFullYear() === currentYear && txDate.getMonth() === currentMonth;
@@ -535,7 +592,7 @@ function renderDashboard() {
   const savingsRate = monthIncome > 0 ? ((monthResult / monthIncome) * 100) : 0;
 
   document.getElementById('dashMonthIncome').textContent = formatCurrency(monthIncome);
-  document.getElementById('dashMonthIncomeCount').textContent = `${incomeCount} entradas no período`;
+  document.getElementById('dashMonthIncomeCount').textContent = `${incomeCount} entradas reais no período`;
   document.getElementById('dashMonthExpense').textContent = formatCurrency(monthExpense);
   document.getElementById('dashMonthExpenseCount').textContent = `${expenseCount} despesas registradas`;
   
@@ -544,14 +601,14 @@ function renderDashboard() {
   resultEl.className = `kpi-value ${monthResult >= 0 ? 'color-income' : 'color-expense'}`;
   document.getElementById('dashMonthResultPct').textContent = `Taxa de poupança: ${savingsRate.toFixed(1)}%`;
 
-  // 5. Estimated Dividends & Yield
-  document.getElementById('dashEstimatedDividends').textContent = `${formatCurrency(totalMonthlyDividends)}/mês`;
+  // 6. Proventos
+  document.getElementById('dashEstimatedDividends').textContent = formatCurrency(totalMonthlyDividends);
   const avgYieldMonthly = totalFiisVal > 0 ? (totalMonthlyDividends / totalFiisVal) * 100 : 0;
   document.getElementById('dashPortfolioYieldAvg').textContent = `Yield médio: ${avgYieldMonthly.toFixed(2)}% a.m.`;
 
-  // 6. Previews
+  // 7. Previews na Dashboard
   renderDashboardAccountsPreview(filteredAccounts);
-  renderDashboardFiisPreview();
+  renderDashboardCardsPreview(filteredCards);
   renderDashboardRecentTransactions(monthTransactions);
 }
 
@@ -560,15 +617,12 @@ function renderDashboardAccountsPreview(accounts) {
   if (!container) return;
 
   if (accounts.length === 0) {
-    container.innerHTML = `<p class="text-dim" style="padding: 12px; font-size: 0.85rem;">Nenhuma conta encontrada com o filtro selecionado.</p>`;
+    container.innerHTML = `<p class="text-dim" style="padding: 12px; font-size: 0.85rem;">Nenhuma conta bancária cadastrada.</p>`;
     return;
   }
 
-  // Show top 4 accounts
   container.innerHTML = accounts.slice(0, 4).map(acc => {
     const purposeObj = appState.purposes.find(p => p.id === acc.purpose) || { name: acc.purpose || 'PESSOAL', color: '#10b981' };
-    const isCredit = acc.type === 'credit';
-    const displayVal = isCredit ? Number(acc.currentInvoice || 0) : Number(acc.balance || 0);
     const preset = BANK_PRESETS[acc.bankPreset] || { color: acc.color || '#6366f1', logo: acc.name.substring(0, 2) };
 
     return `
@@ -583,48 +637,49 @@ function renderDashboardAccountsPreview(accounts) {
               <span class="card-purpose-badge" style="color: ${purposeObj.color}; border-color: ${purposeObj.color}40; background: ${purposeObj.color}15">
                 ${purposeObj.name}
               </span>
-              <span>${isCredit ? 'Cartão de Crédito' : 'Saldo em Conta'}</span>
+              <span>${getAccountTypeLabel(acc.type)}</span>
             </div>
           </div>
         </div>
-        <div class="acc-mini-val ${isCredit ? 'color-expense' : 'color-brand'}">
-          ${isCredit ? '-' : ''}${formatCurrency(displayVal)}
+        <div class="acc-mini-val color-brand">
+          ${formatCurrency(acc.balance)}
         </div>
       </div>
     `;
   }).join('');
 }
 
-function renderDashboardFiisPreview() {
-  const container = document.getElementById('dashFiisPreview');
+function renderDashboardCardsPreview(cards) {
+  const container = document.getElementById('dashCardsPreview');
   if (!container) return;
 
-  if (appState.fiis.length === 0) {
-    container.innerHTML = `<p class="text-dim" style="padding: 12px; font-size: 0.85rem;">Nenhum FII cadastrado ainda. Clique em "FIIs & Proventos" para adicionar.</p>`;
+  if (cards.length === 0) {
+    container.innerHTML = `<p class="text-dim" style="padding: 12px; font-size: 0.85rem;">Nenhum cartão de crédito cadastrado.</p>`;
     return;
   }
 
-  container.innerHTML = appState.fiis.slice(0, 4).map(fii => {
-    const curVal = (Number(fii.shares) || 0) * (Number(fii.currentPrice) || 0);
-    const monthlyDiv = (Number(fii.shares) || 0) * (Number(fii.lastDividend) || 0);
-    const dy = Number(fii.currentPrice) > 0 ? ((Number(fii.lastDividend) || 0) / Number(fii.currentPrice)) * 100 : 0;
+  container.innerHTML = cards.slice(0, 4).map(card => {
+    const purposeObj = appState.purposes.find(p => p.id === card.purpose) || { name: card.purpose || 'PESSOAL', color: '#10b981' };
+    const preset = BANK_PRESETS[card.bank] || { color: card.color || '#820ad1', logo: 'CARD' };
 
     return `
       <div class="acc-mini-card">
         <div class="acc-mini-left">
-          <div class="bank-avatar-badge" style="background: linear-gradient(135deg, #06b6d4, #3b82f6)">
-            ${fii.ticker.substring(0, 4)}
+          <div class="bank-avatar-badge" style="background: ${card.color || preset.color}">
+            💳
           </div>
           <div>
-            <div class="acc-mini-title">${fii.ticker} <small class="text-muted">(${fii.shares} cotas)</small></div>
+            <div class="acc-mini-title">${card.name}</div>
             <div class="acc-mini-sub">
-              <span>${fii.segment}</span> • <span class="color-emerald">DY ${dy.toFixed(2)}% a.m.</span>
+              <span class="card-purpose-badge" style="color: ${purposeObj.color}; border-color: ${purposeObj.color}40; background: ${purposeObj.color}15">
+                ${purposeObj.name}
+              </span>
+              <span>Vence dia ${card.dueDay || '--'}</span>
             </div>
           </div>
         </div>
-        <div style="text-align: right">
-          <div class="acc-mini-val">${formatCurrency(curVal)}</div>
-          <div class="acc-mini-sub color-emerald">+${formatCurrency(monthlyDiv)}/mês</div>
+        <div class="acc-mini-val color-expense">
+          -${formatCurrency(card.invoice)}
         </div>
       </div>
     `;
@@ -643,7 +698,7 @@ function renderDashboardRecentTransactions(transactions) {
   const sorted = [...transactions].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 6);
 
   tbody.innerHTML = sorted.map(tx => {
-    const acc = appState.accounts.find(a => a.id === tx.accountId) || { name: 'Conta Desconhecida' };
+    const originLabel = getTxOriginLabel(tx);
     const purposeObj = appState.purposes.find(p => p.id === tx.purpose) || { name: tx.purpose || 'PESSOAL', color: '#10b981' };
     const cat = appState.categories.find(c => c.id === tx.category) || { name: tx.category || 'Geral', icon: '🏷️' };
     const isIncome = tx.type === 'income';
@@ -653,7 +708,7 @@ function renderDashboardRecentTransactions(transactions) {
       <tr>
         <td>${formatDateBR(tx.date)}</td>
         <td><strong>${tx.description}</strong></td>
-        <td>${acc.name}</td>
+        <td>${originLabel}</td>
         <td>
           <span class="card-purpose-badge" style="color:${purposeObj.color}; border-color:${purposeObj.color}40; background:${purposeObj.color}15">
             ${purposeObj.name}
@@ -673,14 +728,22 @@ function renderDashboardRecentTransactions(transactions) {
   }).join('');
 }
 
+function getTxOriginLabel(tx) {
+  if (tx.originType === 'card' || tx.cardId) {
+    const card = appState.cards.find(c => c.id === (tx.cardId || tx.accountId));
+    return card ? `💳 ${card.name}` : '💳 Cartão de Crédito';
+  } else {
+    const acc = appState.accounts.find(a => a.id === tx.accountId);
+    return acc ? `🏦 ${acc.name}` : '🏦 Conta Bancária';
+  }
+}
+
 // =========================================================================
-// ACCOUNTS VIEW RENDERING & CRUD
+// ACCOUNTS VIEW (CONTAS BANCÁRIAS)
 // =========================================================================
 
 function getFilteredAccounts() {
-  if (globalSelectedPurpose === 'ALL') {
-    return appState.accounts;
-  }
+  if (globalSelectedPurpose === 'ALL') return appState.accounts;
   return appState.accounts.filter(a => a.purpose === globalSelectedPurpose);
 }
 
@@ -690,40 +753,32 @@ function renderAccountsView() {
 
   const accounts = getFilteredAccounts();
 
-  // Summary figures
   let cashTotal = 0;
   let casaTotal = 0;
   let pessoalTotal = 0;
-  let cardsTotal = 0;
 
   appState.accounts.forEach(acc => {
-    if (acc.type === 'credit') {
-      cardsTotal += Number(acc.currentInvoice || 0);
-    } else {
-      const bal = Number(acc.balance || 0);
-      cashTotal += bal;
-      if (acc.purpose === 'casa') casaTotal += bal;
-      if (acc.purpose === 'pessoal') pessoalTotal += bal;
-    }
+    const bal = Number(acc.balance || 0);
+    cashTotal += bal;
+    if (acc.purpose === 'casa') casaTotal += bal;
+    if (acc.purpose === 'pessoal') pessoalTotal += bal;
   });
 
   document.getElementById('accTotalCash').textContent = formatCurrency(cashTotal);
   document.getElementById('accTotalCasa').textContent = formatCurrency(casaTotal);
   document.getElementById('accTotalPessoal').textContent = formatCurrency(pessoalTotal);
-  document.getElementById('accTotalCards').textContent = formatCurrency(cardsTotal);
 
   if (accounts.length === 0) {
     container.innerHTML = `
       <div style="grid-column: 1 / -1; text-align: center; padding: 40px; background: rgba(255,255,255,0.02); border-radius: var(--radius-lg); border: 1px dashed var(--border-subtle)">
-        <p style="color: var(--text-muted); margin-bottom: 12px;">Nenhuma conta bancária cadastrada para este filtro.</p>
-        <button class="btn-primary" onclick="openNewAccountModal()">+ Cadastrar Minha Primeira Conta</button>
+        <p style="color: var(--text-muted); margin-bottom: 12px;">Nenhuma conta bancária cadastrada.</p>
+        <button class="btn-primary" onclick="openNewAccountModal()">+ Cadastrar Minha Primeira Conta Bancária</button>
       </div>
     `;
     return;
   }
 
   container.innerHTML = accounts.map(acc => {
-    const isCredit = acc.type === 'credit';
     const purposeObj = appState.purposes.find(p => p.id === acc.purpose) || { name: acc.purpose || 'PESSOAL', color: '#10b981' };
     const preset = BANK_PRESETS[acc.bankPreset] || { color: acc.color || '#6366f1', logo: 'BANK' };
     const cardColor = acc.color || preset.color;
@@ -744,18 +799,11 @@ function renderAccountsView() {
         </div>
 
         <div class="card-balance-block">
-          <span class="card-balance-label">${isCredit ? 'Fatura Atual a Vencer' : 'Saldo Disponível Atual'}</span>
-          <div class="card-balance-val" style="color: ${isCredit ? 'var(--expense)' : '#fff'}">
-            ${isCredit ? '-' : ''}${formatCurrency(isCredit ? acc.currentInvoice : acc.balance)}
+          <span class="card-balance-label">Saldo Disponível Real</span>
+          <div class="card-balance-val">
+            ${formatCurrency(acc.balance)}
           </div>
         </div>
-
-        ${isCredit ? `
-          <div class="card-credit-details">
-            <span>Limite: <strong>${formatCurrency(acc.creditLimit)}</strong></span>
-            <span>Fecha dia <strong>${acc.closingDay || '--'}</strong> • Vence dia <strong>${acc.dueDay || '--'}</strong></span>
-          </div>
-        ` : ''}
 
         <div class="card-actions-row">
           <button class="btn-action-pill" onclick="openAdjustBalanceModal('${acc.id}')" title="Ajustar saldo e registrar evolução">
@@ -780,12 +828,157 @@ function renderAccountsView() {
 function getAccountTypeLabel(type) {
   switch (type) {
     case 'checking': return 'Conta Corrente';
-    case 'credit': return 'Cartão de Crédito';
     case 'savings': return 'Poupança / Reserva';
-    case 'investment': return 'Investimentos';
+    case 'investment': return 'Conta de Investimentos';
     case 'cash': return 'Dinheiro em Espécie';
     default: return 'Conta';
   }
+}
+
+function openNewAccountModal() {
+  document.getElementById('modalAccountTitle').textContent = 'Cadastrar Conta Bancária';
+  document.getElementById('formAccount').reset();
+  document.getElementById('accFormId').value = '';
+  document.getElementById('accFormBalance').value = '0.00';
+  
+  handleBankPresetChange('Nubank');
+  populatePurposeOptions('accFormPurpose');
+  openModal('modalAccount');
+}
+
+function editAccount(accId) {
+  const acc = appState.accounts.find(a => a.id === accId);
+  if (!acc) return;
+
+  document.getElementById('modalAccountTitle').textContent = 'Editar Conta Bancária';
+  document.getElementById('accFormId').value = acc.id;
+  document.getElementById('accFormName').value = acc.name;
+  document.getElementById('accFormBankPreset').value = acc.bankPreset || 'Outro';
+  document.getElementById('accFormType').value = acc.type || 'checking';
+  document.getElementById('accFormColor').value = acc.color || '#820ad1';
+  document.getElementById('accFormBalance').value = acc.balance || '0.00';
+
+  populatePurposeOptions('accFormPurpose', acc.purpose);
+  openModal('modalAccount');
+}
+
+function handleAccountFormSubmit(e) {
+  e.preventDefault();
+  const id = document.getElementById('accFormId').value;
+  const name = document.getElementById('accFormName').value.trim();
+  const bankPreset = document.getElementById('accFormBankPreset').value;
+  const type = document.getElementById('accFormType').value;
+  const purpose = document.getElementById('accFormPurpose').value;
+  const color = document.getElementById('accFormColor').value;
+  const balance = parseFloat(document.getElementById('accFormBalance').value) || 0;
+
+  if (id) {
+    const acc = appState.accounts.find(a => a.id === id);
+    if (acc) {
+      acc.name = name;
+      acc.bankPreset = bankPreset;
+      acc.type = type;
+      acc.purpose = purpose;
+      acc.color = color;
+      acc.balance = balance;
+      showToast('Conta bancária atualizada com sucesso!', 'success');
+    }
+  } else {
+    const newAcc = {
+      id: 'acc_' + Date.now(),
+      name,
+      bankPreset,
+      type,
+      purpose,
+      color,
+      balance
+    };
+    appState.accounts.push(newAcc);
+
+    // Initial snapshot real
+    appState.balanceSnapshots.push({
+      id: 'snap_' + Date.now(),
+      date: new Date().toISOString(),
+      accountId: newAcc.id,
+      oldBalance: 0,
+      newBalance: balance,
+      diff: balance,
+      reason: 'Saldo Inicial'
+    });
+
+    showToast('Conta bancária cadastrada com sucesso!', 'success');
+  }
+
+  saveLocalState();
+  closeModal('modalAccount');
+  renderApp();
+}
+
+function deleteAccount(accId) {
+  const acc = appState.accounts.find(a => a.id === accId);
+  if (!acc) return;
+
+  if (confirm(`Tem certeza que deseja excluir a conta "${acc.name}"?`)) {
+    appState.accounts = appState.accounts.filter(a => a.id !== accId);
+    saveLocalState();
+    renderApp();
+    showToast('Conta excluída.', 'info');
+  }
+}
+
+function handleBankPresetChange(preset) {
+  const p = BANK_PRESETS[preset];
+  if (p && p.color) {
+    document.getElementById('accFormColor').value = p.color;
+  }
+}
+
+// Adjust Balance Modal
+function openAdjustBalanceModal(accId) {
+  const acc = appState.accounts.find(a => a.id === accId);
+  if (!acc) return;
+
+  const currentVal = Number(acc.balance || 0);
+
+  document.getElementById('adjustAccId').value = acc.id;
+  document.getElementById('adjustAccNameDisplay').textContent = `${acc.name} (${getAccountTypeLabel(acc.type)})`;
+  document.getElementById('adjustAccOldBalanceDisplay').textContent = formatCurrency(currentVal);
+  document.getElementById('adjustNewBalance').value = currentVal.toFixed(2);
+  document.getElementById('adjustDate').value = new Date().toISOString().split('T')[0];
+  document.getElementById('adjustReason').value = 'Conciliação mensal de saldo';
+
+  openModal('modalAdjustBalance');
+}
+
+function handleAdjustBalanceSubmit(e) {
+  e.preventDefault();
+  const accId = document.getElementById('adjustAccId').value;
+  const newBalance = parseFloat(document.getElementById('adjustNewBalance').value);
+  const adjustDate = document.getElementById('adjustDate').value;
+  const reason = document.getElementById('adjustReason').value.trim();
+
+  const acc = appState.accounts.find(a => a.id === accId);
+  if (!acc) return;
+
+  const oldBalance = Number(acc.balance || 0);
+  const diff = newBalance - oldBalance;
+  acc.balance = newBalance;
+
+  // Real snapshot
+  appState.balanceSnapshots.push({
+    id: 'snap_' + Date.now(),
+    date: adjustDate ? new Date(adjustDate).toISOString() : new Date().toISOString(),
+    accountId: acc.id,
+    oldBalance,
+    newBalance,
+    diff,
+    reason: reason || 'Ajuste manual'
+  });
+
+  saveLocalState();
+  closeModal('modalAdjustBalance');
+  renderApp();
+  showToast('Saldo ajustado e registrado no histórico de evolução!', 'success');
 }
 
 function renderBalanceSnapshotsTable() {
@@ -825,205 +1018,355 @@ function renderBalanceSnapshotsTable() {
 }
 
 // =========================================================================
-// ACCOUNT FORM & ADJUSTMENT MODALS
+// VIEW: CARTÕES DE CRÉDITO (AMBIENTE DEDICADO)
 // =========================================================================
 
-function openNewAccountModal() {
-  document.getElementById('modalAccountTitle').textContent = 'Cadastrar Conta Bancária';
-  document.getElementById('formAccount').reset();
-  document.getElementById('accFormId').value = '';
-  document.getElementById('accFormBalance').value = '0.00';
-  document.getElementById('balanceFieldContainer').classList.remove('hidden');
-  
-  // Set default bank preset
-  handleBankPresetChange('Nubank');
-  handleAccountTypeChange('checking');
-  populatePurposeOptions('accFormPurpose');
-
-  openModal('modalAccount');
+function getFilteredCards() {
+  if (globalSelectedPurpose === 'ALL') return appState.cards;
+  return appState.cards.filter(c => c.purpose === globalSelectedPurpose);
 }
 
-function editAccount(accId) {
-  const acc = appState.accounts.find(a => a.id === accId);
-  if (!acc) return;
+function filterCardsByPurpose(purposeId) {
+  globalSelectedPurpose = purposeId;
+  const select = document.getElementById('globalPurposeFilter');
+  if (select) select.value = purposeId;
+  renderApp();
+}
 
-  document.getElementById('modalAccountTitle').textContent = 'Editar Conta Bancária';
-  document.getElementById('accFormId').value = acc.id;
-  document.getElementById('accFormName').value = acc.name;
-  document.getElementById('accFormBankPreset').value = acc.bankPreset || 'Outro';
-  document.getElementById('accFormType').value = acc.type || 'checking';
-  document.getElementById('accFormColor').value = acc.color || '#820ad1';
+function renderCardsView() {
+  const container = document.getElementById('creditCardsGrid');
+  if (!container) return;
 
-  populatePurposeOptions('accFormPurpose', acc.purpose);
+  const cards = getFilteredCards();
 
-  handleAccountTypeChange(acc.type || 'checking');
+  let totalInvoice = 0;
+  let totalLimit = 0;
 
-  if (acc.type === 'credit') {
-    document.getElementById('accFormCreditLimit').value = acc.creditLimit || '';
-    document.getElementById('accFormCurrentInvoice').value = acc.currentInvoice || '';
-    document.getElementById('accFormClosingDay').value = acc.closingDay || '';
-    document.getElementById('accFormDueDay').value = acc.dueDay || '';
-  } else {
-    document.getElementById('accFormBalance').value = acc.balance || '0.00';
+  appState.cards.forEach(c => {
+    totalInvoice += Number(c.invoice || 0);
+    totalLimit += Number(c.limit || 0);
+  });
+
+  const totalAvailable = Math.max(0, totalLimit - totalInvoice);
+
+  document.getElementById('cardsTotalInvoiceVal').textContent = formatCurrency(totalInvoice);
+  document.getElementById('cardsTotalLimitVal').textContent = formatCurrency(totalLimit);
+  document.getElementById('cardsTotalAvailableVal').textContent = formatCurrency(totalAvailable);
+
+  if (cards.length === 0) {
+    container.innerHTML = `
+      <div style="grid-column: 1 / -1; text-align: center; padding: 40px; background: rgba(255,255,255,0.02); border-radius: var(--radius-lg); border: 1px dashed var(--border-subtle)">
+        <p style="color: var(--text-muted); margin-bottom: 12px;">Nenhum cartão de crédito cadastrado.</p>
+        <button class="btn-primary" onclick="openNewCreditCardModal()">+ Cadastrar Cartão de Crédito</button>
+      </div>
+    `;
+    renderCardTransactionsTable([]);
+    return;
   }
 
-  openModal('modalAccount');
+  container.innerHTML = cards.map(card => {
+    const purposeObj = appState.purposes.find(p => p.id === card.purpose) || { name: card.purpose || 'PESSOAL', color: '#10b981' };
+    const available = Math.max(0, Number(card.limit || 0) - Number(card.invoice || 0));
+    const cardColor = card.color || '#820ad1';
+
+    return `
+      <div class="bank-card-item" style="border-top: 4px solid ${cardColor}">
+        <div class="card-top-row">
+          <div class="card-bank-badge">
+            <div class="card-chip"></div>
+            <div>
+              <span class="card-bank-name">${card.name}</span>
+              <div style="font-size: 0.72rem; color: var(--text-muted)">${card.bank} • Cartão de Crédito</div>
+            </div>
+          </div>
+          <span class="card-purpose-badge" style="color: ${purposeObj.color}; border-color: ${purposeObj.color}50; background: ${purposeObj.color}20">
+            ${purposeObj.name}
+          </span>
+        </div>
+
+        <div class="card-balance-block">
+          <span class="card-balance-label">Fatura Atual a Pagar</span>
+          <div class="card-balance-val color-expense">
+            -${formatCurrency(card.invoice)}
+          </div>
+        </div>
+
+        <div class="card-credit-details">
+          <span>Limite: <strong>${formatCurrency(card.limit)}</strong></span>
+          <span>Disponível: <strong class="color-emerald">${formatCurrency(available)}</strong></span>
+        </div>
+        <div class="card-credit-details">
+          <span>Fecha dia <strong>${card.closingDay || '--'}</strong></span>
+          <span>Vence dia <strong>${card.dueDay || '--'}</strong></span>
+        </div>
+
+        <div class="card-actions-row">
+          <div>
+            <button class="btn-action-pill" onclick="openNewCardExpenseModal('${card.id}')" title="Lançar compra neste cartão">
+              💳 + Despesa
+            </button>
+            <button class="btn-action-pill" onclick="openPayInvoiceModal('${card.id}')" title="Pagar e abater fatura">
+              ✅ Pagar Fatura
+            </button>
+          </div>
+          <div>
+            <button class="btn-icon-sm" onclick="editCreditCard('${card.id}')" title="Editar Cartão">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+            </button>
+            <button class="btn-icon-sm" onclick="deleteCreditCard('${card.id}')" title="Excluir Cartão">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // Render credit card expenses
+  const cardTxs = appState.transactions.filter(t => t.originType === 'card' || appState.cards.some(c => c.id === t.accountId));
+  renderCardTransactionsTable(cardTxs);
 }
 
-function handleAccountFormSubmit(e) {
-  e.preventDefault();
-  const id = document.getElementById('accFormId').value;
-  const name = document.getElementById('accFormName').value.trim();
-  const bankPreset = document.getElementById('accFormBankPreset').value;
-  const type = document.getElementById('accFormType').value;
-  const purpose = document.getElementById('accFormPurpose').value;
-  const color = document.getElementById('accFormColor').value;
+function renderCardTransactionsTable(txs) {
+  const tbody = document.getElementById('cardTransactionsTableBody');
+  if (!tbody) return;
 
-  const isCredit = type === 'credit';
-  const balance = isCredit ? 0 : parseFloat(document.getElementById('accFormBalance').value) || 0;
-  const creditLimit = isCredit ? parseFloat(document.getElementById('accFormCreditLimit').value) || 0 : 0;
-  const currentInvoice = isCredit ? parseFloat(document.getElementById('accFormCurrentInvoice').value) || 0 : 0;
-  const closingDay = isCredit ? parseInt(document.getElementById('accFormClosingDay').value) || 1 : null;
-  const dueDay = isCredit ? parseInt(document.getElementById('accFormDueDay').value) || 10 : null;
+  if (txs.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-dim); padding: 20px;">Nenhuma despesa de cartão de crédito registrada ainda. Use o botão "+ Despesa no Cartão" para lançar.</td></tr>`;
+    return;
+  }
+
+  const sorted = [...txs].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  tbody.innerHTML = sorted.map(tx => {
+    const card = appState.cards.find(c => c.id === (tx.cardId || tx.accountId)) || { name: 'Cartão' };
+    const purposeObj = appState.purposes.find(p => p.id === tx.purpose) || { name: tx.purpose || 'PESSOAL', color: '#10b981' };
+    const cat = appState.categories.find(c => c.id === tx.category) || { name: tx.category || 'Geral', icon: '🏷️' };
+    const isCompleted = tx.status === 'completed';
+
+    return `
+      <tr>
+        <td>${formatDateBR(tx.date)}</td>
+        <td><strong>💳 ${card.name}</strong></td>
+        <td>${tx.description}</td>
+        <td>${cat.icon} ${cat.name}</td>
+        <td>
+          <span class="card-purpose-badge" style="color:${purposeObj.color}; border-color:${purposeObj.color}40; background:${purposeObj.color}15">
+            ${purposeObj.name}
+          </span>
+        </td>
+        <td class="color-expense"><strong>-${formatCurrency(tx.amount)}</strong></td>
+        <td>
+          <span class="status-badge ${isCompleted ? 'status-paid' : 'status-pending'}" onclick="toggleTxStatus('${tx.id}')">
+            ${isCompleted ? '✓ Na Fatura' : '⏳ Pendente'}
+          </span>
+        </td>
+        <td>
+          <button class="btn-icon-sm" onclick="editTransaction('${tx.id}')" title="Editar">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+          </button>
+          <button class="btn-icon-sm" onclick="deleteTransaction('${tx.id}')" title="Excluir">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function openNewCreditCardModal() {
+  document.getElementById('modalCreditCardTitle').textContent = 'Cadastrar Cartão de Crédito';
+  document.getElementById('formCreditCard').reset();
+  document.getElementById('cardFormId').value = '';
+  document.getElementById('cardFormInvoice').value = '0.00';
+  document.getElementById('cardFormClosing').value = '20';
+  document.getElementById('cardFormDue').value = '1';
+
+  populatePurposeOptions('cardFormPurpose');
+  openModal('modalCreditCard');
+}
+
+function editCreditCard(cardId) {
+  const card = appState.cards.find(c => c.id === cardId);
+  if (!card) return;
+
+  document.getElementById('modalCreditCardTitle').textContent = 'Editar Cartão de Crédito';
+  document.getElementById('cardFormId').value = card.id;
+  document.getElementById('cardFormName').value = card.name;
+  document.getElementById('cardFormBank').value = card.bank || 'Outro';
+  document.getElementById('cardFormLimit').value = card.limit || '';
+  document.getElementById('cardFormInvoice').value = card.invoice || '0.00';
+  document.getElementById('cardFormClosing').value = card.closingDay || '';
+  document.getElementById('cardFormDue').value = card.dueDay || '';
+  document.getElementById('cardFormColor').value = card.color || '#820ad1';
+
+  populatePurposeOptions('cardFormPurpose', card.purpose);
+  openModal('modalCreditCard');
+}
+
+function handleCreditCardFormSubmit(e) {
+  e.preventDefault();
+  const id = document.getElementById('cardFormId').value;
+  const name = document.getElementById('cardFormName').value.trim();
+  const bank = document.getElementById('cardFormBank').value;
+  const purpose = document.getElementById('cardFormPurpose').value;
+  const limit = parseFloat(document.getElementById('cardFormLimit').value) || 0;
+  const invoice = parseFloat(document.getElementById('cardFormInvoice').value) || 0;
+  const closingDay = parseInt(document.getElementById('cardFormClosing').value) || 20;
+  const dueDay = parseInt(document.getElementById('cardFormDue').value) || 1;
+  const color = document.getElementById('cardFormColor').value;
 
   if (id) {
-    // Update
-    const acc = appState.accounts.find(a => a.id === id);
-    if (acc) {
-      acc.name = name;
-      acc.bankPreset = bankPreset;
-      acc.type = type;
-      acc.purpose = purpose;
-      acc.color = color;
-      if (!isCredit) acc.balance = balance;
-      if (isCredit) {
-        acc.creditLimit = creditLimit;
-        acc.currentInvoice = currentInvoice;
-        acc.closingDay = closingDay;
-        acc.dueDay = dueDay;
-      }
-      showToast('Conta atualizada com sucesso!', 'success');
+    const card = appState.cards.find(c => c.id === id);
+    if (card) {
+      card.name = name;
+      card.bank = bank;
+      card.purpose = purpose;
+      card.limit = limit;
+      card.invoice = invoice;
+      card.closingDay = closingDay;
+      card.dueDay = dueDay;
+      card.color = color;
+      showToast('Cartão de crédito atualizado com sucesso!', 'success');
     }
   } else {
-    // Create new
-    const newAcc = {
-      id: 'acc_' + Date.now(),
+    const newCard = {
+      id: 'card_' + Date.now(),
       name,
-      bankPreset,
-      type,
+      bank,
       purpose,
-      color,
-      balance,
-      creditLimit,
-      currentInvoice,
+      limit,
+      invoice,
       closingDay,
-      dueDay
+      dueDay,
+      color
     };
-    appState.accounts.push(newAcc);
-
-    // Initial snapshot
-    appState.balanceSnapshots.push({
-      id: 'snap_' + Date.now(),
-      date: new Date().toISOString(),
-      accountId: newAcc.id,
-      oldBalance: 0,
-      newBalance: isCredit ? currentInvoice : balance,
-      diff: isCredit ? currentInvoice : balance,
-      reason: 'Saldo Inicial'
-    });
-
-    showToast('Conta bancária cadastrada com sucesso!', 'success');
+    appState.cards.push(newCard);
+    showToast('Cartão de crédito cadastrado com sucesso!', 'success');
   }
 
   saveLocalState();
-  closeModal('modalAccount');
+  closeModal('modalCreditCard');
   renderApp();
 }
 
-function deleteAccount(accId) {
-  const acc = appState.accounts.find(a => a.id === accId);
-  if (!acc) return;
+function deleteCreditCard(cardId) {
+  const card = appState.cards.find(c => c.id === cardId);
+  if (!card) return;
 
-  if (confirm(`Tem certeza que deseja excluir a conta "${acc.name}"? Todos os lançamentos vinculados a ela serão mantidos.`)) {
-    appState.accounts = appState.accounts.filter(a => a.id !== accId);
+  if (confirm(`Tem certeza que deseja excluir o cartão "${card.name}"?`)) {
+    appState.cards = appState.cards.filter(c => c.id !== cardId);
     saveLocalState();
     renderApp();
-    showToast('Conta excluída com sucesso.', 'info');
+    showToast('Cartão excluído.', 'info');
   }
 }
 
-function handleBankPresetChange(preset) {
+function handleCardPresetChange(preset) {
   const p = BANK_PRESETS[preset];
   if (p && p.color) {
-    document.getElementById('accFormColor').value = p.color;
+    document.getElementById('cardFormColor').value = p.color;
   }
 }
 
-function handleAccountTypeChange(type) {
-  const isCredit = type === 'credit';
-  document.querySelectorAll('.credit-fields').forEach(el => {
-    el.classList.toggle('hidden', !isCredit);
-  });
-  document.getElementById('balanceFieldContainer').classList.toggle('hidden', isCredit);
+// Pagar Fatura
+function openPayInvoiceModal(preselectedCardId) {
+  if (appState.cards.length === 0) {
+    showToast('Cadastre um cartão de crédito primeiro.', 'info');
+    return;
+  }
+  if (appState.accounts.length === 0) {
+    showToast('Cadastre uma conta bancária primeiro para debitar o pagamento.', 'info');
+    return;
+  }
+
+  const cardSelect = document.getElementById('payInvoiceCard');
+  cardSelect.innerHTML = appState.cards.map(c => `
+    <option value="${c.id}" ${preselectedCardId === c.id ? 'selected' : ''}>${c.name} (Fatura atual: ${formatCurrency(c.invoice)})</option>
+  `).join('');
+
+  const targetCardId = preselectedCardId || appState.cards[0].id;
+  const targetCard = appState.cards.find(c => c.id === targetCardId);
+  document.getElementById('payInvoiceAmount').value = targetCard ? targetCard.invoice : '0.00';
+
+  const accSelect = document.getElementById('payInvoiceAccount');
+  accSelect.innerHTML = appState.accounts.map(a => `
+    <option value="${a.id}">${a.name} (Saldo: ${formatCurrency(a.balance)})</option>
+  `).join('');
+
+  document.getElementById('payInvoiceDate').value = new Date().toISOString().split('T')[0];
+  openModal('modalPayInvoice');
 }
 
-// Adjust Balance Modal
-function openAdjustBalanceModal(accId) {
-  const acc = appState.accounts.find(a => a.id === accId);
-  if (!acc) return;
-
-  const isCredit = acc.type === 'credit';
-  const currentVal = isCredit ? Number(acc.currentInvoice || 0) : Number(acc.balance || 0);
-
-  document.getElementById('adjustAccId').value = acc.id;
-  document.getElementById('adjustAccNameDisplay').textContent = `${acc.name} (${getAccountTypeLabel(acc.type)})`;
-  document.getElementById('adjustAccOldBalanceDisplay').textContent = formatCurrency(currentVal);
-  document.getElementById('adjustNewBalance').value = currentVal.toFixed(2);
-  document.getElementById('adjustDate').value = new Date().toISOString().split('T')[0];
-  document.getElementById('adjustReason').value = 'Conciliação bancária mensal';
-
-  openModal('modalAdjustBalance');
+function handlePayInvoiceCardChange(cardId) {
+  const card = appState.cards.find(c => c.id === cardId);
+  if (card) {
+    document.getElementById('payInvoiceAmount').value = card.invoice;
+  }
 }
 
-function handleAdjustBalanceSubmit(e) {
+function handlePayInvoiceSubmit(e) {
   e.preventDefault();
-  const accId = document.getElementById('adjustAccId').value;
-  const newBalance = parseFloat(document.getElementById('adjustNewBalance').value);
-  const adjustDate = document.getElementById('adjustDate').value;
-  const reason = document.getElementById('adjustReason').value.trim();
+  const cardId = document.getElementById('payInvoiceCard').value;
+  const amount = parseFloat(document.getElementById('payInvoiceAmount').value) || 0;
+  const accountId = document.getElementById('payInvoiceAccount').value;
+  const payDate = document.getElementById('payInvoiceDate').value;
 
-  const acc = appState.accounts.find(a => a.id === accId);
-  if (!acc) return;
+  const card = appState.cards.find(c => c.id === cardId);
+  const acc = appState.accounts.find(a => a.id === accountId);
 
-  const isCredit = acc.type === 'credit';
-  const oldBalance = isCredit ? Number(acc.currentInvoice || 0) : Number(acc.balance || 0);
-  const diff = newBalance - oldBalance;
+  if (!card || !acc) return;
 
-  if (isCredit) {
-    acc.currentInvoice = newBalance;
-  } else {
-    acc.balance = newBalance;
-  }
+  // Deduct from bank account
+  acc.balance = (Number(acc.balance) || 0) - amount;
 
-  // Record evolution snapshot
+  // Abate credit card invoice
+  card.invoice = Math.max(0, (Number(card.invoice) || 0) - amount);
+
+  // Record payment transaction
+  appState.transactions.push({
+    id: 'tx_' + Date.now(),
+    date: payDate ? new Date(payDate).toISOString() : new Date().toISOString(),
+    type: 'expense',
+    description: `Pagamento Fatura ${card.name}`,
+    amount: amount,
+    accountId: acc.id,
+    originType: 'account',
+    purpose: card.purpose || 'pessoal',
+    category: 'contas',
+    status: 'completed'
+  });
+
+  // Record snapshot for account
   appState.balanceSnapshots.push({
     id: 'snap_' + Date.now(),
-    date: adjustDate ? new Date(adjustDate).toISOString() : new Date().toISOString(),
+    date: payDate ? new Date(payDate).toISOString() : new Date().toISOString(),
     accountId: acc.id,
-    oldBalance,
-    newBalance,
-    diff,
-    reason: reason || 'Ajuste manual'
+    oldBalance: acc.balance + amount,
+    newBalance: acc.balance,
+    diff: -amount,
+    reason: `Pagamento de fatura ${card.name}`
   });
 
   saveLocalState();
-  closeModal('modalAdjustBalance');
+  closeModal('modalPayInvoice');
   renderApp();
-  showToast('Saldo ajustado e registrado no histórico de evolução!', 'success');
+  showToast(`Fatura do cartão ${card.name} paga com sucesso!`, 'success');
+}
+
+// Quick action: Nova Despesa no Cartão
+function openNewCardExpenseModal(preselectedCardId) {
+  openNewTransactionModal();
+  handleTxTypeRadioChange('expense');
+  handleOriginTypeRadioChange('card');
+  if (preselectedCardId) {
+    document.getElementById('txFormAccount').value = preselectedCardId;
+    handleTxAccountChange(preselectedCardId);
+  }
 }
 
 // =========================================================================
-// FIIS VIEW RENDERING & CRUD
+// VIEW: FIIS & INVESTIMENTOS (SIMPLIFICADO POR SALDO NO MOMENTO)
 // =========================================================================
 
 function renderFiisView() {
@@ -1031,42 +1374,27 @@ function renderFiisView() {
   if (!tbody) return;
 
   let totalCurrentVal = 0;
-  let totalInvestedVal = 0;
   let totalMonthlyDividends = 0;
 
   appState.fiis.forEach(fii => {
-    const shares = Number(fii.shares) || 0;
-    const avgPrice = Number(fii.avgPrice) || 0;
-    const curPrice = Number(fii.currentPrice) || 0;
-    const dividend = Number(fii.lastDividend) || 0;
-
-    totalInvestedVal += shares * avgPrice;
-    totalCurrentVal += shares * curPrice;
-    totalMonthlyDividends += shares * dividend;
+    totalCurrentVal += Number(fii.balance || 0);
+    totalMonthlyDividends += Number(fii.monthlyDividend || 0);
   });
 
-  const profitLoss = totalCurrentVal - totalInvestedVal;
-  const profitLossPct = totalInvestedVal > 0 ? (profitLoss / totalInvestedVal) * 100 : 0;
   const avgDY = totalCurrentVal > 0 ? (totalMonthlyDividends / totalCurrentVal) * 100 : 0;
   const annualDY = avgDY * 12;
 
   document.getElementById('fiiTotalCurrentVal').textContent = formatCurrency(totalCurrentVal);
-  document.getElementById('fiiTotalInvestedDiff').textContent = `Investido: ${formatCurrency(totalInvestedVal)}`;
-
-  const plEl = document.getElementById('fiiProfitLossVal');
-  plEl.textContent = `${profitLoss >= 0 ? '+' : ''}${formatCurrency(profitLoss)}`;
-  plEl.className = `fii-metric-val ${profitLoss >= 0 ? 'color-income' : 'color-expense'}`;
-  document.getElementById('fiiProfitLossPct').textContent = `${profitLossPct >= 0 ? '+' : ''}${profitLossPct.toFixed(2)}%`;
-
   document.getElementById('fiiMonthlyDividends').textContent = formatCurrency(totalMonthlyDividends);
   document.getElementById('fiiAverageYield').textContent = `${avgDY.toFixed(2)}% a.m.`;
   document.getElementById('fiiAnnualizedYield').textContent = `~${annualDY.toFixed(2)}% ao ano`;
+  document.getElementById('fiiTotalCountDisplay').textContent = `${appState.fiis.length} fundos`;
 
   if (appState.fiis.length === 0) {
     tbody.innerHTML = `
       <tr>
-        <td colspan="12" style="text-align: center; color: var(--text-dim); padding: 30px;">
-          Nenhum FII cadastrado. Clique no botão "+ Cadastrar FII" acima para adicionar seus fundos imobiliários.
+        <td colspan="7" style="text-align: center; color: var(--text-dim); padding: 30px;">
+          Nenhum FII cadastrado. Clique no botão "+ Cadastrar FII" acima para registrar seus fundos.
         </td>
       </tr>
     `;
@@ -1074,38 +1402,31 @@ function renderFiisView() {
   }
 
   tbody.innerHTML = appState.fiis.map(fii => {
-    const shares = Number(fii.shares) || 0;
-    const avgPrice = Number(fii.avgPrice) || 0;
-    const curPrice = Number(fii.currentPrice) || 0;
-    const dividend = Number(fii.lastDividend) || 0;
-
-    const invested = shares * avgPrice;
-    const current = shares * curPrice;
-    const profit = current - invested;
-    const profitPct = invested > 0 ? (profit / invested) * 100 : 0;
-    const monthlyRenda = shares * dividend;
-    const dy = curPrice > 0 ? (dividend / curPrice) * 100 : 0;
+    const bal = Number(fii.balance || 0);
+    const div = Number(fii.monthlyDividend || 0);
+    const dy = bal > 0 ? (div / bal) * 100 : 0;
+    const purposeObj = appState.purposes.find(p => p.id === fii.purpose) || { name: fii.purpose || 'PESSOAL', color: '#10b981' };
 
     return `
       <tr>
-        <td><strong>${fii.ticker}</strong></td>
-        <td><span class="type-pill" style="background: rgba(6, 182, 212, 0.15); color: #06b6d4">${fii.segment}</span></td>
-        <td>${shares}</td>
-        <td>${formatCurrency(avgPrice)}</td>
-        <td>${formatCurrency(curPrice)}</td>
-        <td>${formatCurrency(invested)}</td>
-        <td><strong>${formatCurrency(current)}</strong></td>
-        <td class="${profit >= 0 ? 'val-positive' : 'val-negative'}">
-          ${formatCurrency(profit)} (${formatPercent(profitPct)})
-        </td>
-        <td>${formatCurrency(dividend)}</td>
-        <td class="color-emerald"><strong>+${formatCurrency(monthlyRenda)}</strong></td>
-        <td><strong>${dy.toFixed(2)}%</strong></td>
+        <td><strong>🏢 ${fii.ticker}</strong></td>
+        <td><span class="type-pill" style="background: rgba(6, 182, 212, 0.15); color: #06b6d4">${fii.segment || 'Geral'}</span></td>
+        <td><strong style="font-size: 1.05rem; color: #fff;">${formatCurrency(bal)}</strong></td>
+        <td class="color-emerald"><strong>+${formatCurrency(div)}</strong></td>
         <td>
-          <button class="btn-icon-sm" onclick="editFii('${fii.id}')" title="Editar FII">
+          <span class="card-purpose-badge" style="color: ${purposeObj.color}; border-color: ${purposeObj.color}40; background: ${purposeObj.color}15">
+            ${purposeObj.name}
+          </span>
+        </td>
+        <td><strong>${dy.toFixed(2)}% a.m.</strong></td>
+        <td>
+          <button class="btn-action-pill" onclick="openAdjustFiiModal('${fii.id}')" title="Ajustar Saldo Atual">
+            ⚖️ Ajustar Saldo
+          </button>
+          <button class="btn-icon-sm" onclick="editFii('${fii.id}')" title="Editar">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
           </button>
-          <button class="btn-icon-sm" onclick="deleteFii('${fii.id}')" title="Excluir FII">
+          <button class="btn-icon-sm" onclick="deleteFii('${fii.id}')" title="Excluir">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
           </button>
         </td>
@@ -1118,7 +1439,7 @@ function openNewFiiModal() {
   document.getElementById('modalFiiTitle').textContent = 'Cadastrar Fundo Imobiliário (FII)';
   document.getElementById('formFii').reset();
   document.getElementById('fiiFormId').value = '';
-  populateCustodianOptions();
+  populatePurposeOptions('fiiFormPurpose');
   openModal('modalFii');
 }
 
@@ -1129,13 +1450,11 @@ function editFii(fiiId) {
   document.getElementById('modalFiiTitle').textContent = 'Editar Fundo Imobiliário';
   document.getElementById('fiiFormId').value = fii.id;
   document.getElementById('fiiFormTicker').value = fii.ticker;
-  document.getElementById('fiiFormSegment').value = fii.segment;
-  document.getElementById('fiiFormShares').value = fii.shares;
-  document.getElementById('fiiFormAvgPrice').value = fii.avgPrice;
-  document.getElementById('fiiFormCurrentPrice').value = fii.currentPrice;
-  document.getElementById('fiiFormLastDividend').value = fii.lastDividend || '';
+  document.getElementById('fiiFormBalance').value = fii.balance;
+  document.getElementById('fiiFormLastDividend').value = fii.monthlyDividend || '';
+  document.getElementById('fiiFormSegment').value = fii.segment || 'Geral';
 
-  populateCustodianOptions(fii.custodian);
+  populatePurposeOptions('fiiFormPurpose', fii.purpose);
   openModal('modalFii');
 }
 
@@ -1143,37 +1462,43 @@ function handleFiiFormSubmit(e) {
   e.preventDefault();
   const id = document.getElementById('fiiFormId').value;
   const ticker = document.getElementById('fiiFormTicker').value.trim().toUpperCase();
+  const balance = parseFloat(document.getElementById('fiiFormBalance').value) || 0;
+  const monthlyDividend = parseFloat(document.getElementById('fiiFormLastDividend').value) || 0;
   const segment = document.getElementById('fiiFormSegment').value;
-  const shares = parseInt(document.getElementById('fiiFormShares').value) || 0;
-  const avgPrice = parseFloat(document.getElementById('fiiFormAvgPrice').value) || 0;
-  const currentPrice = parseFloat(document.getElementById('fiiFormCurrentPrice').value) || 0;
-  const lastDividend = parseFloat(document.getElementById('fiiFormLastDividend').value) || 0;
-  const custodian = document.getElementById('fiiFormCustodian').value;
+  const purpose = document.getElementById('fiiFormPurpose').value;
 
   if (id) {
     const fii = appState.fiis.find(f => f.id === id);
     if (fii) {
       fii.ticker = ticker;
+      fii.balance = balance;
+      fii.monthlyDividend = monthlyDividend;
       fii.segment = segment;
-      fii.shares = shares;
-      fii.avgPrice = avgPrice;
-      fii.currentPrice = currentPrice;
-      fii.lastDividend = lastDividend;
-      fii.custodian = custodian;
+      fii.purpose = purpose;
       showToast('FII atualizado com sucesso!', 'success');
     }
   } else {
     const newFii = {
       id: 'fii_' + Date.now(),
       ticker,
+      balance,
+      monthlyDividend,
       segment,
-      shares,
-      avgPrice,
-      currentPrice,
-      lastDividend,
-      custodian
+      purpose
     };
     appState.fiis.push(newFii);
+
+    // Snapshot inicial real do FII
+    appState.balanceSnapshots.push({
+      id: 'snap_' + Date.now(),
+      date: new Date().toISOString(),
+      fiiId: newFii.id,
+      oldBalance: 0,
+      newBalance: balance,
+      diff: balance,
+      reason: `Saldo Inicial FII ${ticker}`
+    });
+
     showToast(`FII ${ticker} cadastrado com sucesso!`, 'success');
   }
 
@@ -1182,15 +1507,57 @@ function handleFiiFormSubmit(e) {
   renderApp();
 }
 
+function openAdjustFiiModal(fiiId) {
+  const fii = appState.fiis.find(f => f.id === fiiId);
+  if (!fii) return;
+
+  document.getElementById('adjustFiiId').value = fii.id;
+  document.getElementById('adjustFiiNameDisplay').textContent = `${fii.ticker} (${fii.segment || 'FII'})`;
+  document.getElementById('adjustFiiOldBalanceDisplay').textContent = formatCurrency(fii.balance);
+  document.getElementById('adjustFiiNewBalance').value = fii.balance.toFixed(2);
+  document.getElementById('adjustFiiDate').value = new Date().toISOString().split('T')[0];
+
+  openModal('modalAdjustFii');
+}
+
+function handleAdjustFiiSubmit(e) {
+  e.preventDefault();
+  const id = document.getElementById('adjustFiiId').value;
+  const newBalance = parseFloat(document.getElementById('adjustFiiNewBalance').value) || 0;
+  const adjustDate = document.getElementById('adjustFiiDate').value;
+
+  const fii = appState.fiis.find(f => f.id === id);
+  if (fii) {
+    const oldBalance = Number(fii.balance || 0);
+    fii.balance = newBalance;
+
+    // Snapshot de ajuste real do FII
+    appState.balanceSnapshots.push({
+      id: 'snap_' + Date.now(),
+      date: adjustDate ? new Date(adjustDate + 'T12:00:00').toISOString() : new Date().toISOString(),
+      fiiId: fii.id,
+      oldBalance: oldBalance,
+      newBalance: newBalance,
+      diff: newBalance - oldBalance,
+      reason: `Ajuste Saldo FII ${fii.ticker}`
+    });
+
+    showToast(`Saldo do FII ${fii.ticker} atualizado!`, 'success');
+    saveLocalState();
+    closeModal('modalAdjustFii');
+    renderApp();
+  }
+}
+
 function deleteFii(fiiId) {
   const fii = appState.fiis.find(f => f.id === fiiId);
   if (!fii) return;
 
-  if (confirm(`Deseja remover o FII ${fii.ticker} da sua carteira?`)) {
+  if (confirm(`Deseja remover o FII ${fii.ticker}?`)) {
     appState.fiis = appState.fiis.filter(f => f.id !== fiiId);
     saveLocalState();
     renderApp();
-    showToast('FII removido com sucesso.', 'info');
+    showToast('FII removido.', 'info');
   }
 }
 
@@ -1203,18 +1570,8 @@ function handleFiiSearch(query) {
   });
 }
 
-function populateCustodianOptions(selectedId) {
-  const select = document.getElementById('fiiFormCustodian');
-  if (!select) return;
-
-  const invAccounts = appState.accounts.filter(a => a.type === 'investment' || a.type === 'checking');
-  select.innerHTML = '<option value="">(Nenhuma / Não especificada)</option>' + invAccounts.map(a => `
-    <option value="${a.id}" ${selectedId === a.id ? 'selected' : ''}>${a.name} (${a.bankPreset})</option>
-  `).join('');
-}
-
 // =========================================================================
-// TRANSACTIONS VIEW RENDERING & CRUD
+// VIEW: LANÇAMENTOS (TRANSAÇÕES COM ORIGEM ESPECÍFICA)
 // =========================================================================
 
 function renderTransactionsView() {
@@ -1224,10 +1581,19 @@ function renderTransactionsView() {
 
 function populateTxFilterOptions() {
   const accSelect = document.getElementById('txAccountFilter');
-  if (accSelect && accSelect.children.length <= 1) {
-    accSelect.innerHTML = '<option value="ALL">Todas as Contas</option>' + appState.accounts.map(a => `
-      <option value="${a.id}">${a.name} (${a.bankPreset})</option>
-    `).join('');
+  if (accSelect) {
+    let html = '<option value="ALL">Todas as Origens</option>';
+    html += '<optgroup label="Contas Bancárias">';
+    appState.accounts.forEach(a => {
+      html += `<option value="acc_${a.id}">🏦 ${a.name}</option>`;
+    });
+    html += '</optgroup>';
+    html += '<optgroup label="Cartões de Crédito">';
+    appState.cards.forEach(c => {
+      html += `<option value="card_${c.id}">💳 ${c.name}</option>`;
+    });
+    html += '</optgroup>';
+    accSelect.innerHTML = html;
   }
 
   const purpSelect = document.getElementById('txPurposeFilter');
@@ -1245,7 +1611,7 @@ function applyTransactionFilters() {
 
   const searchText = (document.getElementById('txSearchInput')?.value || '').toLowerCase();
   const typeFilter = document.getElementById('txTypeFilter')?.value || 'ALL';
-  const accFilter = document.getElementById('txAccountFilter')?.value || 'ALL';
+  const originFilter = document.getElementById('txAccountFilter')?.value || 'ALL';
   const purpFilter = document.getElementById('txPurposeFilter')?.value || 'ALL';
   const statusFilter = document.getElementById('txStatusFilter')?.value || 'ALL';
 
@@ -1259,14 +1625,23 @@ function applyTransactionFilters() {
 
     if (searchText && !tx.description.toLowerCase().includes(searchText)) return false;
     if (typeFilter !== 'ALL' && tx.type !== typeFilter) return false;
-    if (accFilter !== 'ALL' && tx.accountId !== accFilter) return false;
+    
+    if (originFilter !== 'ALL') {
+      if (originFilter.startsWith('acc_')) {
+        const accId = originFilter.replace('acc_', '');
+        if (tx.accountId !== accId || tx.originType === 'card') return false;
+      } else if (originFilter.startsWith('card_')) {
+        const cardId = originFilter.replace('card_', '');
+        if (tx.cardId !== cardId && tx.accountId !== cardId) return false;
+      }
+    }
+
     if (purpFilter !== 'ALL' && tx.purpose !== purpFilter) return false;
     if (statusFilter !== 'ALL' && tx.status !== statusFilter) return false;
 
     return true;
   });
 
-  // Calculate filter strip totals
   let filteredIncome = 0;
   let filteredExpense = 0;
   filtered.forEach(tx => {
@@ -1291,7 +1666,7 @@ function applyTransactionFilters() {
   const sorted = [...filtered].sort((a, b) => new Date(b.date) - new Date(a.date));
 
   tbody.innerHTML = sorted.map(tx => {
-    const acc = appState.accounts.find(a => a.id === tx.accountId) || { name: 'Conta Desconhecida' };
+    const originLabel = getTxOriginLabel(tx);
     const purposeObj = appState.purposes.find(p => p.id === tx.purpose) || { name: tx.purpose || 'PESSOAL', color: '#10b981' };
     const cat = appState.categories.find(c => c.id === tx.category) || { name: tx.category || 'Geral', icon: '🏷️' };
     const isIncome = tx.type === 'income';
@@ -1306,7 +1681,7 @@ function applyTransactionFilters() {
           </span>
         </td>
         <td><strong>${tx.description}</strong></td>
-        <td>${acc.name}</td>
+        <td>${originLabel}</td>
         <td>
           <span class="card-purpose-badge" style="color:${purposeObj.color}; border-color:${purposeObj.color}40; background:${purposeObj.color}15">
             ${purposeObj.name}
@@ -1341,28 +1716,9 @@ function openNewTransactionModal() {
   document.getElementById('txFormDate').value = new Date().toISOString().split('T')[0];
   
   handleTxTypeRadioChange('expense');
-  populateAccountOptionsInTxModal();
+  handleOriginTypeRadioChange('account');
   populatePurposeOptions('txFormPurpose');
   populateCategoryOptionsInTxModal('expense');
-
-  openModal('modalTransaction');
-}
-
-function editTransaction(txId) {
-  const tx = appState.transactions.find(t => t.id === txId);
-  if (!tx) return;
-
-  document.getElementById('modalTransactionTitle').textContent = 'Editar Lançamento';
-  document.getElementById('txFormId').value = tx.id;
-  document.getElementById('txFormDesc').value = tx.description;
-  document.getElementById('txFormAmount').value = tx.amount;
-  document.getElementById('txFormDate').value = tx.date ? tx.date.split('T')[0] : '';
-  document.getElementById('txFormStatus').value = tx.status || 'completed';
-
-  handleTxTypeRadioChange(tx.type);
-  populateAccountOptionsInTxModal(tx.accountId);
-  populatePurposeOptions('txFormPurpose', tx.purpose);
-  populateCategoryOptionsInTxModal(tx.type, tx.category);
 
   openModal('modalTransaction');
 }
@@ -1373,42 +1729,51 @@ function handleTxTypeRadioChange(type) {
   if (activeTab) activeTab.classList.add('active');
 
   const isTransfer = type === 'transfer';
+  const isIncome = type === 'income';
+
   document.getElementById('txDestinationGroup').classList.toggle('hidden', !isTransfer);
   document.getElementById('txCategoryGroup').classList.toggle('hidden', isTransfer);
-  document.getElementById('txAccountLabel').textContent = isTransfer ? 'Conta de Origem *' : 'Conta ou Cartão *';
+  document.getElementById('txOriginTypeContainer').classList.toggle('hidden', isTransfer || isIncome);
+
+  if (isIncome || isTransfer) {
+    handleOriginTypeRadioChange('account');
+  }
 
   populateCategoryOptionsInTxModal(type);
 }
 
-function populateAccountOptionsInTxModal(selectedAccId) {
+function handleOriginTypeRadioChange(originType) {
+  document.getElementById('tabOriginAccount').classList.toggle('active', originType === 'account');
+  document.getElementById('tabOriginCard').classList.toggle('active', originType === 'card');
+
   const select = document.getElementById('txFormAccount');
-  const destSelect = document.getElementById('txFormDestination');
-  if (!select) return;
+  const label = document.getElementById('txAccountLabel');
 
-  const options = appState.accounts.map(acc => {
-    const isCredit = acc.type === 'credit';
-    return `<option value="${acc.id}" ${selectedAccId === acc.id ? 'selected' : ''}>${acc.name} (${isCredit ? 'Cartão' : acc.bankPreset})</option>`;
-  }).join('');
-
-  select.innerHTML = options || '<option value="">Cadastre uma conta primeiro</option>';
-  if (destSelect) {
-    destSelect.innerHTML = appState.accounts.filter(a => a.type !== 'credit').map(acc => `
-      <option value="${acc.id}">${acc.name} (${acc.bankPreset})</option>
-    `).join('');
+  if (originType === 'card') {
+    label.textContent = 'Qual Cartão de Crédito? *';
+    select.innerHTML = appState.cards.map(c => `
+      <option value="${c.id}">💳 ${c.name} (Fatura: ${formatCurrency(c.invoice)})</option>
+    `).join('') || '<option value="">Nenhum cartão cadastrado</option>';
+  } else {
+    label.textContent = 'Qual Conta Bancária / Dinheiro? *';
+    select.innerHTML = appState.accounts.map(a => `
+      <option value="${a.id}">🏦 ${a.name} (Saldo: ${formatCurrency(a.balance)})</option>
+    `).join('') || '<option value="">Nenhuma conta cadastrada</option>';
   }
 
-  // Pre-select purpose from selected account
-  if (selectedAccId) {
-    handleTxAccountChange(selectedAccId);
-  } else if (appState.accounts.length > 0) {
-    handleTxAccountChange(appState.accounts[0].id);
+  if (select.value) {
+    handleTxAccountChange(select.value);
   }
 }
 
-function handleTxAccountChange(accId) {
-  const acc = appState.accounts.find(a => a.id === accId);
-  if (acc && acc.purpose) {
-    document.getElementById('txFormPurpose').value = acc.purpose;
+function handleTxAccountChange(id) {
+  const originType = document.querySelector('input[name="txOriginType"]:checked')?.value || 'account';
+  if (originType === 'card') {
+    const card = appState.cards.find(c => c.id === id);
+    if (card && card.purpose) document.getElementById('txFormPurpose').value = card.purpose;
+  } else {
+    const acc = appState.accounts.find(a => a.id === id);
+    if (acc && acc.purpose) document.getElementById('txFormPurpose').value = acc.purpose;
   }
 }
 
@@ -1434,44 +1799,43 @@ function handleTransactionSubmit(e) {
   const category = document.getElementById('txFormCategory').value;
   const status = document.getElementById('txFormStatus').value;
 
-  const typeRadio = document.querySelector('input[name="txType"]:checked');
-  const type = typeRadio ? typeRadio.value : 'expense';
+  const type = document.querySelector('input[name="txType"]:checked')?.value || 'expense';
+  const originType = (type === 'income' || type === 'transfer') ? 'account' : (document.querySelector('input[name="txOriginType"]:checked')?.value || 'account');
 
   if (!accountId) {
-    showToast('Selecione uma conta bancária ou cartão.', 'error');
+    showToast('Selecione uma conta ou cartão.', 'error');
     return;
   }
 
   if (id) {
-    // Edit existing transaction
     const tx = appState.transactions.find(t => t.id === id);
     if (tx) {
-      // Revert old effect if completed
-      adjustAccountBalanceForTx(tx, true);
+      adjustBalanceForTx(tx, true);
 
       tx.description = desc;
       tx.amount = amount;
       tx.date = date ? new Date(date).toISOString() : new Date().toISOString();
       tx.accountId = accountId;
+      tx.originType = originType;
+      tx.cardId = originType === 'card' ? accountId : null;
       tx.destinationAccountId = destinationAccountId;
       tx.purpose = purpose;
       tx.category = category;
       tx.status = status;
       tx.type = type;
 
-      // Apply new effect if completed
-      adjustAccountBalanceForTx(tx, false);
-
+      adjustBalanceForTx(tx, false);
       showToast('Lançamento atualizado!', 'success');
     }
   } else {
-    // New transaction
     const newTx = {
       id: 'tx_' + Date.now(),
       description: desc,
       amount,
       date: date ? new Date(date).toISOString() : new Date().toISOString(),
       accountId,
+      originType,
+      cardId: originType === 'card' ? accountId : null,
       destinationAccountId,
       purpose,
       category,
@@ -1480,7 +1844,7 @@ function handleTransactionSubmit(e) {
     };
 
     appState.transactions.push(newTx);
-    adjustAccountBalanceForTx(newTx, false);
+    adjustBalanceForTx(newTx, false);
     showToast('Lançamento registrado com sucesso!', 'success');
   }
 
@@ -1489,26 +1853,29 @@ function handleTransactionSubmit(e) {
   renderApp();
 }
 
-function adjustAccountBalanceForTx(tx, isRevert = false) {
+function adjustBalanceForTx(tx, isRevert = false) {
   if (tx.status !== 'completed') return;
-
   const multiplier = isRevert ? -1 : 1;
-  const acc = appState.accounts.find(a => a.id === tx.accountId);
-  if (!acc) return;
 
-  if (tx.type === 'expense') {
-    if (acc.type === 'credit') {
-      acc.currentInvoice = (Number(acc.currentInvoice) || 0) + (tx.amount * multiplier);
-    } else {
-      acc.balance = (Number(acc.balance) || 0) - (tx.amount * multiplier);
+  if (tx.originType === 'card' || tx.cardId) {
+    const card = appState.cards.find(c => c.id === (tx.cardId || tx.accountId));
+    if (card) {
+      card.invoice = (Number(card.invoice) || 0) + (tx.amount * multiplier);
     }
-  } else if (tx.type === 'income') {
-    acc.balance = (Number(acc.balance) || 0) + (tx.amount * multiplier);
-  } else if (tx.type === 'transfer') {
-    const destAcc = appState.accounts.find(a => a.id === tx.destinationAccountId);
-    acc.balance = (Number(acc.balance) || 0) - (tx.amount * multiplier);
-    if (destAcc) {
-      destAcc.balance = (Number(destAcc.balance) || 0) + (tx.amount * multiplier);
+  } else {
+    const acc = appState.accounts.find(a => a.id === tx.accountId);
+    if (!acc) return;
+
+    if (tx.type === 'expense') {
+      acc.balance = (Number(acc.balance) || 0) - (tx.amount * multiplier);
+    } else if (tx.type === 'income') {
+      acc.balance = (Number(acc.balance) || 0) + (tx.amount * multiplier);
+    } else if (tx.type === 'transfer') {
+      const destAcc = appState.accounts.find(a => a.id === tx.destinationAccountId);
+      acc.balance = (Number(acc.balance) || 0) - (tx.amount * multiplier);
+      if (destAcc) {
+        destAcc.balance = (Number(destAcc.balance) || 0) + (tx.amount * multiplier);
+      }
     }
   }
 }
@@ -1517,15 +1884,38 @@ function toggleTxStatus(txId) {
   const tx = appState.transactions.find(t => t.id === txId);
   if (!tx) return;
 
-  // Toggle between completed and pending
   const wasCompleted = tx.status === 'completed';
-  adjustAccountBalanceForTx(tx, true); // Revert previous state
+  adjustBalanceForTx(tx, true);
   tx.status = wasCompleted ? 'pending' : 'completed';
-  adjustAccountBalanceForTx(tx, false); // Apply new state
+  adjustBalanceForTx(tx, false);
 
   saveLocalState();
   renderApp();
   showToast(`Situação alterada para ${tx.status === 'completed' ? 'Concluído' : 'Pendente'}`, 'info');
+}
+
+function editTransaction(txId) {
+  const tx = appState.transactions.find(t => t.id === txId);
+  if (!tx) return;
+
+  document.getElementById('modalTransactionTitle').textContent = 'Editar Lançamento';
+  document.getElementById('txFormId').value = tx.id;
+  document.getElementById('txFormDesc').value = tx.description;
+  document.getElementById('txFormAmount').value = tx.amount;
+  document.getElementById('txFormDate').value = tx.date ? tx.date.split('T')[0] : '';
+  document.getElementById('txFormStatus').value = tx.status || 'completed';
+
+  handleTxTypeRadioChange(tx.type);
+  const origin = tx.originType || (tx.cardId ? 'card' : 'account');
+  handleOriginTypeRadioChange(origin);
+
+  const accSelect = document.getElementById('txFormAccount');
+  if (accSelect) accSelect.value = tx.cardId || tx.accountId;
+
+  populatePurposeOptions('txFormPurpose', tx.purpose);
+  populateCategoryOptionsInTxModal(tx.type, tx.category);
+
+  openModal('modalTransaction');
 }
 
 function deleteTransaction(txId) {
@@ -1533,16 +1923,16 @@ function deleteTransaction(txId) {
   if (!tx) return;
 
   if (confirm(`Deseja excluir o lançamento "${tx.description}"?`)) {
-    adjustAccountBalanceForTx(tx, true); // Revert balance impact
+    adjustBalanceForTx(tx, true);
     appState.transactions = appState.transactions.filter(t => t.id !== txId);
     saveLocalState();
     renderApp();
-    showToast('Lançamento excluído com sucesso.', 'info');
+    showToast('Lançamento excluído.', 'info');
   }
 }
 
 // =========================================================================
-// PURPOSES (CASA / PESSOAL / CUSTOM DEFINITIONS)
+// PURPOSES (CASA / PESSOAL / DEFINIÇÕES CUSTOMIZADAS)
 // =========================================================================
 
 function renderPurposeSelectors() {
@@ -1559,10 +1949,9 @@ function renderPurposeSelectors() {
     `).join('')}
   `;
 
-  // Render pills in accounts view
-  const row = document.getElementById('accountPurposeFilterRow');
-  if (row) {
-    row.innerHTML = `
+  const accRow = document.getElementById('accountPurposeFilterRow');
+  if (accRow) {
+    accRow.innerHTML = `
       <button class="pill-filter-btn ${globalSelectedPurpose === 'ALL' ? 'active' : ''}" onclick="filterAccountsByPurpose('ALL')">Todas as Contas</button>
       ${appState.purposes.map(p => `
         <button class="pill-filter-btn ${globalSelectedPurpose === p.id ? 'active' : ''}" onclick="filterAccountsByPurpose('${p.id}')">
@@ -1600,7 +1989,7 @@ function renderPurposesSettings() {
         <span class="purpose-color-badge" style="background: ${p.color}"></span>
         <div>
           <span class="purpose-name">${p.name}</span>
-          <div style="font-size: 0.72rem; color: var(--text-dim)">${p.description || 'Finalidade de conta'}</div>
+          <div style="font-size: 0.72rem; color: var(--text-dim)">${p.description || 'Finalidade de conta/cartão'}</div>
         </div>
       </div>
       <div>
@@ -1631,7 +2020,6 @@ function handleNewPurposeSubmit(e) {
   e.preventDefault();
   const name = document.getElementById('newPurposeName').value.trim().toUpperCase();
   const color = document.getElementById('newPurposeColor').value;
-
   if (!name) return;
 
   const id = name.toLowerCase().replace(/[^a-z0-9]/g, '_');
@@ -1652,7 +2040,7 @@ function handleNewPurposeSubmit(e) {
   document.getElementById('formNewPurpose').reset();
   renderApp();
   renderPurposesSettings();
-  showToast(`Nova finalidade "${name}" criada com sucesso!`, 'success');
+  showToast(`Nova finalidade "${name}" criada!`, 'success');
 }
 
 function deletePurpose(purposeId) {
@@ -1665,7 +2053,7 @@ function deletePurpose(purposeId) {
 }
 
 // =========================================================================
-// CHARTS & HISTORICAL EVOLUTION (CHART.JS)
+// CHARTS & HISTÓRICO 100% REAIS (SEM NENHUM DADO FICTÍCIO)
 // =========================================================================
 
 function destroyChart(name) {
@@ -1678,57 +2066,133 @@ function destroyChart(name) {
 function renderCharts() {
   if (typeof Chart === 'undefined') return;
 
-  // Chart defaults for modern dark aesthetic
   Chart.defaults.color = '#94a3b8';
   Chart.defaults.font.family = "'Plus Jakarta Sans', sans-serif";
 
-  renderNetWorthEvolutionChart();
-  renderCategoryDonutChart();
-  renderPurposeComparisonChart();
-  renderFiiAllocationCharts();
-  renderAccountsEvolutionMultiChart();
-  renderIncomeVsExpenseMonthlyChart();
+  renderRealNetWorthEvolutionChart('chartNetWorthEvolution', 'netWorth');
+  renderRealNetWorthEvolutionChart('chartNetWorthEvolutionSecond', 'netWorthSecond');
+  renderRealCategoryDonutChart();
+  renderRealPurposeComparisonChart();
+  renderRealFiiAllocationCharts();
+  renderRealAccountsEvolutionMultiChart();
+  renderRealIncomeVsExpenseMonthlyChart();
 }
 
-// 1. Consolidated Net Worth Over Last 6 Months
-function renderNetWorthEvolutionChart() {
-  const canvas = document.getElementById('chartNetWorthEvolution');
-  if (!canvas) return;
-  destroyChart('netWorth');
+/**
+ * Helper: Calcula o Patrimônio Líquido Real Consolidado em um determinado timestamp histórico
+ */
+function getConsolidatedNetWorthAtTimestamp(timestamp) {
+  let totalAccounts = 0;
+  let totalFiis = 0;
 
-  const monthsLabels = ['Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro'];
-  // Reconstruct net worth progression from balance snapshots and current balance
+  // Saldos das contas até o momento do timestamp
+  appState.accounts.forEach(acc => {
+    const accSnaps = (appState.balanceSnapshots || [])
+      .filter(s => s.accountId === acc.id && new Date(s.date).getTime() <= timestamp)
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    if (accSnaps.length > 0) {
+      totalAccounts += Number(accSnaps[accSnaps.length - 1].newBalance || 0);
+    }
+  });
+
+  // Saldos dos FIIs até o momento do timestamp
+  appState.fiis.forEach(fii => {
+    const fiiSnaps = (appState.balanceSnapshots || [])
+      .filter(s => s.fiiId === fii.id && new Date(s.date).getTime() <= timestamp)
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    if (fiiSnaps.length > 0) {
+      totalFiis += Number(fiiSnaps[fiiSnaps.length - 1].newBalance || 0);
+    }
+  });
+
+  // Faturas de cartões deduzem do patrimônio líquido
+  let totalInvoices = 0;
+  appState.cards.forEach(c => {
+    totalInvoices += Number(c.invoice || 0);
+  });
+
+  return totalAccounts + totalFiis - totalInvoices;
+}
+
+/**
+ * Gráfico 1: Evolução Patrimonial 100% Real
+ * Baseado estritamente nos snapshots e saldo atual cadastrado
+ */
+function renderRealNetWorthEvolutionChart(canvasId, instanceKey) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  destroyChart(instanceKey);
+
   const currentNetWorth = calculateConsolidatedNetWorth();
-  const historyData = [
-    currentNetWorth * 0.82,
-    currentNetWorth * 0.86,
-    currentNetWorth * 0.89,
-    currentNetWorth * 0.93,
-    currentNetWorth * 0.96,
-    currentNetWorth
-  ];
+  let labels = [];
+  let values = [];
+
+  const validSnaps = (appState.balanceSnapshots || []).filter(s => s && s.date);
+
+  if (validSnaps.length > 0) {
+    // Agrupa datas únicas cronologicamente
+    const dateMap = new Map();
+    validSnaps.forEach(s => {
+      const dStr = formatDateBR(s.date);
+      const time = new Date(s.date).getTime();
+      if (!dateMap.has(dStr) || dateMap.get(dStr).time < time) {
+        dateMap.set(dStr, { str: dStr, time: time });
+      }
+    });
+
+    const todayStr = formatDateBR(new Date().toISOString());
+    if (!dateMap.has(todayStr)) {
+      dateMap.set(todayStr, { str: todayStr, time: Date.now() });
+    }
+
+    const sortedDates = Array.from(dateMap.values()).sort((a, b) => a.time - b.time);
+
+    if (sortedDates.length === 1) {
+      // Se acabou de cadastrar o saldo inicial hoje
+      labels = ['Saldo Inicial Cadastrado', 'Posição Atual'];
+      values = [currentNetWorth, currentNetWorth];
+    } else {
+      labels = sortedDates.map(d => d.str === todayStr ? `${d.str} (Atual)` : d.str);
+      values = sortedDates.map((d, idx) => {
+        if (idx === sortedDates.length - 1 && d.str === todayStr) {
+          return currentNetWorth;
+        }
+        return getConsolidatedNetWorthAtTimestamp(d.time);
+      });
+    }
+  } else {
+    if (currentNetWorth !== 0) {
+      labels = ['Saldo Inicial Cadastrado', 'Posição Atual'];
+      values = [currentNetWorth, currentNetWorth];
+    } else {
+      labels = ['Cadastre suas contas'];
+      values = [0];
+    }
+  }
 
   const ctx = canvas.getContext('2d');
   const gradient = ctx.createLinearGradient(0, 0, 0, 300);
   gradient.addColorStop(0, 'rgba(99, 102, 241, 0.4)');
   gradient.addColorStop(1, 'rgba(99, 102, 241, 0.0)');
 
-  chartsInstances['netWorth'] = new Chart(canvas, {
+  chartsInstances[instanceKey] = new Chart(canvas, {
     type: 'line',
     data: {
-      labels: monthsLabels,
+      labels: labels,
       datasets: [{
-        label: 'Patrimônio Líquido Geral',
-        data: historyData,
+        label: 'Patrimônio Líquido Real',
+        data: values,
         borderColor: '#6366f1',
         backgroundColor: gradient,
         borderWidth: 3,
         fill: true,
-        tension: 0.35,
+        tension: 0.2,
         pointBackgroundColor: '#8b5cf6',
         pointBorderColor: '#ffffff',
-        pointRadius: 5,
-        pointHoverRadius: 8
+        pointRadius: 6,
+        pointHoverRadius: 9
       }]
     },
     options: {
@@ -1738,7 +2202,7 @@ function renderNetWorthEvolutionChart() {
         legend: { display: false },
         tooltip: {
           callbacks: {
-            label: (ctx) => `Patrimônio: ${formatCurrency(ctx.raw)}`
+            label: (ctx) => `Patrimônio Real: ${formatCurrency(ctx.raw)}`
           }
         }
       },
@@ -1747,7 +2211,7 @@ function renderNetWorthEvolutionChart() {
         y: {
           grid: { color: 'rgba(255,255,255,0.05)' },
           ticks: {
-            callback: (v) => 'R$ ' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v)
+            callback: (v) => 'R$ ' + v.toLocaleString('pt-BR')
           }
         }
       }
@@ -1755,8 +2219,10 @@ function renderNetWorthEvolutionChart() {
   });
 }
 
-// 2. Expenses by Category (Donut)
-function renderCategoryDonutChart() {
+/**
+ * Gráfico 2: Despesas por Categoria (100% Real do mês)
+ */
+function renderRealCategoryDonutChart() {
   const canvas = document.getElementById('chartCategoryDonut');
   if (!canvas) return;
   destroyChart('categoryDonut');
@@ -1779,18 +2245,22 @@ function renderCategoryDonutChart() {
 
   const legendContainer = document.getElementById('categoryLegendContainer');
   if (legendContainer) {
-    legendContainer.innerHTML = labels.map((l, i) => `
-      <div class="legend-item">
-        <span class="legend-color-dot" style="background: ${palette[i % palette.length]}"></span>
-        <span>${l}: <strong>${formatCurrency(data[i])}</strong></span>
-      </div>
-    `).join('');
+    if (labels.length === 0) {
+      legendContainer.innerHTML = '<span style="font-size:0.8rem; color:var(--text-dim);">Nenhuma despesa lançada neste mês.</span>';
+    } else {
+      legendContainer.innerHTML = labels.map((l, i) => `
+        <div class="legend-item">
+          <span class="legend-color-dot" style="background: ${palette[i % palette.length]}"></span>
+          <span>${l}: <strong>${formatCurrency(data[i])}</strong></span>
+        </div>
+      `).join('');
+    }
   }
 
   chartsInstances['categoryDonut'] = new Chart(canvas, {
     type: 'doughnut',
     data: {
-      labels: labels.length ? labels : ['Sem dados'],
+      labels: labels.length ? labels : ['Sem despesas'],
       datasets: [{
         data: data.length ? data : [1],
         backgroundColor: data.length ? palette.slice(0, data.length) : ['#334155'],
@@ -1809,13 +2279,15 @@ function renderCategoryDonutChart() {
           }
         }
       },
-      cutout: '72%'
+      cutout: '70%'
     }
   });
 }
 
-// 3. Gastos CASA vs PESSOAL (Bar)
-function renderPurposeComparisonChart() {
+/**
+ * Gráfico 3: Gastos CASA vs PESSOAL (100% Real do mês)
+ */
+function renderRealPurposeComparisonChart() {
   const canvas = document.getElementById('chartPurposeComparison');
   if (!canvas) return;
   destroyChart('purposeComparison');
@@ -1843,7 +2315,7 @@ function renderPurposeComparisonChart() {
     data: {
       labels,
       datasets: [{
-        label: 'Despesas no Mês',
+        label: 'Despesas Reais no Mês',
         data,
         backgroundColor: colors,
         borderRadius: 8,
@@ -1857,7 +2329,7 @@ function renderPurposeComparisonChart() {
         legend: { display: false },
         tooltip: {
           callbacks: {
-            label: (ctx) => `Gasto: ${formatCurrency(ctx.raw)}`
+            label: (ctx) => `Gasto Real: ${formatCurrency(ctx.raw)}`
           }
         }
       },
@@ -1865,15 +2337,17 @@ function renderPurposeComparisonChart() {
         x: { grid: { display: false } },
         y: {
           grid: { color: 'rgba(255,255,255,0.05)' },
-          ticks: { callback: (v) => 'R$ ' + v }
+          ticks: { callback: (v) => 'R$ ' + v.toLocaleString('pt-BR') }
         }
       }
     }
   });
 }
 
-// 4. FII Allocation Charts
-function renderFiiAllocationCharts() {
+/**
+ * Gráfico 4: FIIs Allocation (100% Real)
+ */
+function renderRealFiiAllocationCharts() {
   const allocCanvas = document.getElementById('chartFiiAllocation');
   const segCanvas = document.getElementById('chartFiiSegment');
   if (!allocCanvas || !segCanvas) return;
@@ -1882,12 +2356,12 @@ function renderFiiAllocationCharts() {
   destroyChart('fiiSeg');
 
   const fiiLabels = appState.fiis.map(f => f.ticker);
-  const fiiData = appState.fiis.map(f => (Number(f.shares) || 0) * (Number(f.currentPrice) || 0));
+  const fiiData = appState.fiis.map(f => Number(f.balance || 0));
 
   const segTotals = {};
   appState.fiis.forEach(f => {
-    const val = (Number(f.shares) || 0) * (Number(f.currentPrice) || 0);
-    segTotals[f.segment] = (segTotals[f.segment] || 0) + val;
+    const seg = f.segment || 'Geral';
+    segTotals[seg] = (segTotals[seg] || 0) + Number(f.balance || 0);
   });
 
   const palette = ['#06b6d4', '#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ec4899'];
@@ -1907,9 +2381,7 @@ function renderFiiAllocationCharts() {
       maintainAspectRatio: false,
       plugins: {
         tooltip: {
-          callbacks: {
-            label: (ctx) => `${ctx.label}: ${formatCurrency(ctx.raw)}`
-          }
+          callbacks: { label: (ctx) => `${ctx.label}: ${formatCurrency(ctx.raw)}` }
         }
       },
       cutout: '65%'
@@ -1931,9 +2403,7 @@ function renderFiiAllocationCharts() {
       maintainAspectRatio: false,
       plugins: {
         tooltip: {
-          callbacks: {
-            label: (ctx) => `${ctx.label}: ${formatCurrency(ctx.raw)}`
-          }
+          callbacks: { label: (ctx) => `${ctx.label}: ${formatCurrency(ctx.raw)}` }
         }
       },
       cutout: '65%'
@@ -1941,70 +2411,151 @@ function renderFiiAllocationCharts() {
   });
 }
 
-// 5. Evolução do Saldo por Conta Bancária
-function renderAccountsEvolutionMultiChart() {
+/**
+ * Gráfico 5: Evolução das Contas Bancárias (100% Real)
+ */
+function renderRealAccountsEvolutionMultiChart() {
   const canvas = document.getElementById('chartAccountsEvolutionMulti');
   if (!canvas) return;
   destroyChart('accountsEvolution');
 
-  const months = ['Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro'];
-  const datasets = appState.accounts.slice(0, 5).map(acc => {
-    const isCredit = acc.type === 'credit';
-    const base = isCredit ? Number(acc.currentInvoice || 0) : Number(acc.balance || 0);
-    return {
-      label: acc.name,
-      borderColor: acc.color || '#6366f1',
-      backgroundColor: 'transparent',
-      borderWidth: 2.5,
-      pointRadius: 4,
-      data: [
-        base * 0.75,
-        base * 0.82,
-        base * 0.88,
-        base * 0.94,
-        base * 0.98,
-        base
-      ]
-    };
+  if (appState.accounts.length === 0) return;
+
+  const validSnaps = (appState.balanceSnapshots || []).filter(s => s && s.accountId && s.date);
+  const dateMap = new Map();
+  validSnaps.forEach(s => {
+    const dStr = formatDateBR(s.date);
+    const time = new Date(s.date).getTime();
+    if (!dateMap.has(dStr) || dateMap.get(dStr).time < time) {
+      dateMap.set(dStr, { str: dStr, time: time });
+    }
   });
+
+  const todayStr = formatDateBR(new Date().toISOString());
+  if (!dateMap.has(todayStr)) {
+    dateMap.set(todayStr, { str: todayStr, time: Date.now() });
+  }
+
+  const sortedDates = Array.from(dateMap.values()).sort((a, b) => a.time - b.time);
+
+  let labels = [];
+  let datasets = [];
+
+  if (sortedDates.length <= 1) {
+    labels = ['Saldo Inicial', 'Posição Atual'];
+    datasets = appState.accounts.map(acc => {
+      const b = Number(acc.balance || 0);
+      return {
+        label: acc.name,
+        borderColor: acc.color || '#6366f1',
+        backgroundColor: 'transparent',
+        borderWidth: 2.5,
+        pointRadius: 6,
+        data: [b, b]
+      };
+    });
+  } else {
+    labels = sortedDates.map(d => d.str === todayStr ? `${d.str} (Atual)` : d.str);
+    datasets = appState.accounts.map(acc => {
+      const dataPoints = sortedDates.map((d, idx) => {
+        if (idx === sortedDates.length - 1 && d.str === todayStr) {
+          return Number(acc.balance || 0);
+        }
+        const snaps = (appState.balanceSnapshots || [])
+          .filter(s => s.accountId === acc.id && new Date(s.date).getTime() <= d.time)
+          .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        return snaps.length > 0 ? Number(snaps[snaps.length - 1].newBalance || 0) : 0;
+      });
+
+      return {
+        label: acc.name,
+        borderColor: acc.color || '#6366f1',
+        backgroundColor: 'transparent',
+        borderWidth: 2.5,
+        pointRadius: 5,
+        data: dataPoints
+      };
+    });
+  }
 
   chartsInstances['accountsEvolution'] = new Chart(canvas, {
     type: 'line',
     data: {
-      labels: months,
+      labels,
       datasets
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, position: 'top' },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${formatCurrency(ctx.raw)}`
+          }
+        }
+      },
       scales: {
         x: { grid: { color: 'rgba(255,255,255,0.05)' } },
         y: {
           grid: { color: 'rgba(255,255,255,0.05)' },
-          ticks: { callback: (v) => 'R$ ' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v) }
+          ticks: { callback: (v) => 'R$ ' + v.toLocaleString('pt-BR') }
         }
       }
     }
   });
 }
 
-// 6. Receitas vs Despesas (6 Meses)
-function renderIncomeVsExpenseMonthlyChart() {
+/**
+ * Gráfico 6: Receitas vs Despesas (100% Real - Zero dados fictícios)
+ */
+function renderRealIncomeVsExpenseMonthlyChart() {
   const canvas = document.getElementById('chartIncomeVsExpenseMonthly');
   if (!canvas) return;
   destroyChart('incomeVsExpense');
 
-  const months = ['Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro'];
-  const incomes = [6500, 6800, 7200, 7000, 7800, 8200];
-  const expenses = [4200, 4600, 4800, 5100, 4900, 5300];
+  const monthNames = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+  const currentMonth = appState.settings.currentMonth;
+  const currentYear = appState.settings.currentYear;
+
+  // Let's take the last 6 months strictly
+  const months = [];
+  const incomes = [];
+  const expenses = [];
+
+  for (let i = 5; i >= 0; i--) {
+    let m = currentMonth - i;
+    let y = currentYear;
+    if (m < 0) {
+      m += 12;
+      y -= 1;
+    }
+    const label = `${monthNames[m]}/${y.toString().slice(-2)}`;
+    months.push(label);
+
+    // Sum real transactions for this specific month
+    let inc = 0;
+    let exp = 0;
+
+    appState.transactions.forEach(tx => {
+      const txDate = new Date(tx.date);
+      if (txDate.getFullYear() === y && txDate.getMonth() === m && tx.status === 'completed') {
+        if (tx.type === 'income') inc += Number(tx.amount || 0);
+        if (tx.type === 'expense') exp += Number(tx.amount || 0);
+      }
+    });
+
+    incomes.push(inc);
+    expenses.push(exp);
+  }
 
   chartsInstances['incomeVsExpense'] = new Chart(canvas, {
     type: 'bar',
     data: {
       labels: months,
       datasets: [
-        { label: 'Receitas', data: incomes, backgroundColor: '#10b981', borderRadius: 6 },
-        { label: 'Despesas', data: expenses, backgroundColor: '#f43f5e', borderRadius: 6 }
+        { label: 'Receitas Reais', data: incomes, backgroundColor: '#10b981', borderRadius: 6 },
+        { label: 'Despesas Reais', data: expenses, backgroundColor: '#f43f5e', borderRadius: 6 }
       ]
     },
     options: {
@@ -2014,7 +2565,7 @@ function renderIncomeVsExpenseMonthlyChart() {
         x: { grid: { display: false } },
         y: {
           grid: { color: 'rgba(255,255,255,0.05)' },
-          ticks: { callback: (v) => 'R$ ' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v) }
+          ticks: { callback: (v) => 'R$ ' + v.toLocaleString('pt-BR') }
         }
       }
     }
@@ -2024,17 +2575,19 @@ function renderIncomeVsExpenseMonthlyChart() {
 function calculateConsolidatedNetWorth() {
   let net = 0;
   appState.accounts.forEach(a => {
-    if (a.type === 'credit') net -= Number(a.currentInvoice || 0);
-    else net += Number(a.balance || 0);
+    net += Number(a.balance || 0);
+  });
+  appState.cards.forEach(c => {
+    net -= Number(c.invoice || 0);
   });
   appState.fiis.forEach(f => {
-    net += (Number(f.shares) || 0) * (Number(f.currentPrice) || 0);
+    net += Number(f.balance || 0);
   });
   return net;
 }
 
 // =========================================================================
-// BACKUP, RESTORE & DEMO DATA
+// BACKUP & RESTAURAÇÃO
 // =========================================================================
 
 function exportDataAsJSON() {
@@ -2059,11 +2612,12 @@ function importDataFromJSON(event) {
       const imported = JSON.parse(e.target.result);
       if (imported.accounts && Array.isArray(imported.accounts)) {
         appState = imported;
+        if (!appState.cards) appState.cards = [];
         saveLocalState();
         renderApp();
         showToast('Backup restaurado com sucesso!', 'success');
       } else {
-        showToast('O arquivo selecionado não é um backup válido do FinanceFlow.', 'error');
+        showToast('O arquivo selecionado não é um backup válido.', 'error');
       }
     } catch (err) {
       showToast('Erro ao ler o arquivo JSON: ' + err.message, 'error');
@@ -2072,250 +2626,24 @@ function importDataFromJSON(event) {
   reader.readAsText(file);
 }
 
-function loadSampleDemoData(notify = true) {
-  appState = {
-    accounts: [
-      {
-        id: 'acc_nubank',
-        name: 'Nubank Principal',
-        bankPreset: 'Nubank',
-        type: 'checking',
-        purpose: 'pessoal',
-        color: '#820ad1',
-        balance: 4850.50
-      },
-      {
-        id: 'acc_itau_casa',
-        name: 'Itaú Contas Casa',
-        bankPreset: 'Itaú',
-        type: 'checking',
-        purpose: 'casa',
-        color: '#ec7000',
-        balance: 6200.00
-      },
-      {
-        id: 'acc_inter_reserva',
-        name: 'Inter Reserva de Emergência',
-        bankPreset: 'Inter',
-        type: 'savings',
-        purpose: 'pessoal',
-        color: '#ff7a00',
-        balance: 15400.00
-      },
-      {
-        id: 'acc_xp_invest',
-        name: 'XP Investimentos (Custódia)',
-        bankPreset: 'XP Investimentos',
-        type: 'investment',
-        purpose: 'pessoal',
-        color: '#111111',
-        balance: 1250.00
-      },
-      {
-        id: 'acc_nu_cartao',
-        name: 'Cartão Nubank Black',
-        bankPreset: 'Nubank',
-        type: 'credit',
-        purpose: 'pessoal',
-        color: '#820ad1',
-        creditLimit: 12000.00,
-        currentInvoice: 2150.30,
-        closingDay: 24,
-        dueDay: 1
-      },
-      {
-        id: 'acc_itau_cartao_casa',
-        name: 'Cartão Itaú Compras Casa',
-        bankPreset: 'Itaú',
-        type: 'credit',
-        purpose: 'casa',
-        color: '#ec7000',
-        creditLimit: 15000.00,
-        currentInvoice: 1840.00,
-        closingDay: 20,
-        dueDay: 28
-      }
-    ],
-    fiis: [
-      {
-        id: 'fii_mxrf11',
-        ticker: 'MXRF11',
-        segment: 'Papel / CRI',
-        shares: 600,
-        avgPrice: 10.12,
-        currentPrice: 10.45,
-        lastDividend: 0.10,
-        custodian: 'acc_xp_invest'
-      },
-      {
-        id: 'fii_hglg11',
-        ticker: 'HGLG11',
-        segment: 'Tijolo - Logística',
-        shares: 80,
-        avgPrice: 158.00,
-        currentPrice: 165.20,
-        lastDividend: 1.10,
-        custodian: 'acc_xp_invest'
-      },
-      {
-        id: 'fii_xpml11',
-        ticker: 'XPML11',
-        segment: 'Tijolo - Shopping',
-        shares: 95,
-        avgPrice: 108.50,
-        currentPrice: 114.30,
-        lastDividend: 0.92,
-        custodian: 'acc_xp_invest'
-      },
-      {
-        id: 'fii_kncr11',
-        ticker: 'KNCR11',
-        segment: 'Papel / CDI',
-        shares: 110,
-        avgPrice: 101.40,
-        currentPrice: 104.20,
-        lastDividend: 1.05,
-        custodian: 'acc_xp_invest'
-      }
-    ],
-    transactions: [
-      {
-        id: 'tx_salario',
-        date: '2026-10-05',
-        type: 'income',
-        description: 'Salário Mensal',
-        amount: 8500.00,
-        accountId: 'acc_nubank',
-        purpose: 'pessoal',
-        category: 'salario',
-        status: 'completed'
-      },
-      {
-        id: 'tx_aluguel',
-        date: '2026-10-07',
-        type: 'expense',
-        description: 'Aluguel do Apartamento',
-        amount: 2400.00,
-        accountId: 'acc_itau_casa',
-        purpose: 'casa',
-        category: 'moradia',
-        status: 'completed'
-      },
-      {
-        id: 'tx_mercado',
-        date: '2026-10-10',
-        type: 'expense',
-        description: 'Supermercado Mensal Pão de Açúcar',
-        amount: 1150.40,
-        accountId: 'acc_itau_cartao_casa',
-        purpose: 'casa',
-        category: 'mercado',
-        status: 'completed'
-      },
-      {
-        id: 'tx_luz_net',
-        date: '2026-10-12',
-        type: 'expense',
-        description: 'Energia Elétrica Enel & Fibra Óptica',
-        amount: 380.00,
-        accountId: 'acc_itau_casa',
-        purpose: 'casa',
-        category: 'contas',
-        status: 'completed'
-      },
-      {
-        id: 'tx_restaurante',
-        date: '2026-10-15',
-        type: 'expense',
-        description: 'Jantar Restaurante Fim de Semana',
-        amount: 280.00,
-        accountId: 'acc_nu_cartao',
-        purpose: 'pessoal',
-        category: 'lazer',
-        status: 'completed'
-      },
-      {
-        id: 'tx_div_mxrf',
-        date: '2026-10-16',
-        type: 'income',
-        description: 'Dividendos Recebidos MXRF11',
-        amount: 60.00,
-        accountId: 'acc_xp_invest',
-        purpose: 'pessoal',
-        category: 'dividendos',
-        status: 'completed'
-      },
-      {
-        id: 'tx_farmacia',
-        date: '2026-10-18',
-        type: 'expense',
-        description: 'Farmácia & Vitaminas',
-        amount: 145.00,
-        accountId: 'acc_nubank',
-        purpose: 'pessoal',
-        category: 'saude',
-        status: 'completed'
-      }
-    ],
-    purposes: [
-      { id: 'casa', name: 'CASA', color: '#3b82f6', isDefault: true, description: 'Contas da residência e família' },
-      { id: 'pessoal', name: 'PESSOAL', color: '#10b981', isDefault: true, description: 'Gastos particulares individuais' }
-    ],
-    categories: DEFAULT_STATE.categories,
-    balanceSnapshots: [
-      {
-        id: 'snap_1',
-        date: '2026-08-01',
-        accountId: 'acc_itau_casa',
-        oldBalance: 4500.00,
-        newBalance: 5200.00,
-        diff: 700.00,
-        reason: 'Conciliação início de Agosto'
-      },
-      {
-        id: 'snap_2',
-        date: '2026-09-01',
-        accountId: 'acc_itau_casa',
-        oldBalance: 5200.00,
-        newBalance: 5800.00,
-        diff: 600.00,
-        reason: 'Economia doméstica mensal'
-      },
-      {
-        id: 'snap_3',
-        date: '2026-10-01',
-        accountId: 'acc_itau_casa',
-        oldBalance: 5800.00,
-        newBalance: 6200.00,
-        diff: 400.00,
-        reason: 'Conciliação mensal Outubro'
-      }
-    ],
-    settings: {
-      driveScriptUrl: '',
-      autoSync: true,
-      lastSyncTime: null,
-      privacyMode: false,
-      currentYear: 2026,
-      currentMonth: 9
-    }
-  };
-
-  saveLocalState();
-  renderApp();
-  if (notify) showToast('Dados de demonstração carregados com sucesso!', 'success');
-}
-
 function confirmResetAllData() {
-  if (confirm('ATENÇÃO: Deseja apagar todos os dados e começar do zero? Essa ação limpará suas contas, FIIs e lançamentos.')) {
+  if (confirm('ATENÇÃO: Deseja apagar todos os dados e começar do zero absoluto? Essa ação limpará suas contas, cartões e lançamentos.')) {
+    const driveUrl = appState.settings.driveScriptUrl;
+    const driveToken = appState.settings.driveToken;
+
     appState = {
       accounts: [],
+      cards: [],
       fiis: [],
       transactions: [],
       purposes: DEFAULT_STATE.purposes,
       categories: DEFAULT_STATE.categories,
       balanceSnapshots: [],
-      settings: DEFAULT_STATE.settings
+      settings: {
+        ...DEFAULT_STATE.settings,
+        driveScriptUrl: driveUrl,
+        driveToken: driveToken
+      }
     };
     saveLocalState();
     renderApp();
@@ -2328,12 +2656,16 @@ function copyBackendScriptCode() {
  * FINANCEFLOW - BACKEND DO GOOGLE DRIVE (GOOGLE APPS SCRIPT)
  */
 const DB_FILENAME = "FinanceFlow_Database.json";
+const API_SECRET_TOKEN = ""; // Opcional: defina sua senha aqui se desejar
 
 function doGet(e) {
   try {
     const action = (e && e.parameter && e.parameter.action) ? e.parameter.action : "status";
     if (action === "status" || action === "ping") {
-      return createJsonResponse({ status: "success", message: "FinanceFlow Backend ONLINE e conectado ao Google Drive!", time: new Date().toISOString() });
+      return createJsonResponse({ status: "success", message: "FinanceFlow Backend ONLINE!", time: new Date().toISOString() });
+    }
+    if (!isAuthorized(e, null)) {
+      return createJsonResponse({ status: "error", message: "Acesso não autorizado: senha incorreta." });
     }
     if (action === "load") {
       const data = loadDataFromDrive();
@@ -2351,6 +2683,9 @@ function doPost(e) {
     if (e && e.postData && e.postData.contents) {
       postData = JSON.parse(e.postData.contents);
     }
+    if (!isAuthorized(e, postData)) {
+      return createJsonResponse({ status: "error", message: "Acesso não autorizado: senha incorreta." });
+    }
     if (!postData || !postData.data) {
       return createJsonResponse({ status: "error", message: "Nenhum dado recebido" });
     }
@@ -2361,13 +2696,20 @@ function doPost(e) {
   }
 }
 
+function isAuthorized(e, postData) {
+  if (!API_SECRET_TOKEN || API_SECRET_TOKEN.trim() === "") return true;
+  const tokenFromGet = e && e.parameter ? e.parameter.token : null;
+  const tokenFromPost = postData ? postData.token : null;
+  return tokenFromGet === API_SECRET_TOKEN || tokenFromPost === API_SECRET_TOKEN;
+}
+
 function loadDataFromDrive() {
   const files = DriveApp.getFilesByName(DB_FILENAME);
   if (files.hasNext()) {
     const file = files.next();
     return JSON.parse(file.getBlob().getDataAsString());
   } else {
-    const initialData = { accounts: [], fiis: [], transactions: [], balanceSnapshots: [] };
+    const initialData = { accounts: [], cards: [], fiis: [], transactions: [], balanceSnapshots: [] };
     saveDataToDrive(initialData);
     return initialData;
   }
@@ -2389,9 +2731,9 @@ function createJsonResponse(obj) {
 }`;
 
   navigator.clipboard.writeText(code).then(() => {
-    showToast('Código do Google Apps Script copiado para a área de transferência!', 'success');
+    showToast('Código do Google Apps Script copiado!', 'success');
   }).catch(() => {
-    showToast('Copie o código do arquivo google-apps-script.js disponibilizado na pasta.', 'info');
+    showToast('Abra o arquivo google-apps-script.js para copiar.', 'info');
   });
 }
 
@@ -2401,23 +2743,21 @@ function createJsonResponse(obj) {
 
 function openModal(modalId) {
   const modal = document.getElementById(modalId);
-  if (modal) {
-    modal.classList.add('active');
-  }
+  if (modal) modal.classList.add('active');
 }
 
 function closeModal(modalId) {
   const modal = document.getElementById(modalId);
-  if (modal) {
-    modal.classList.remove('active');
-  }
+  if (modal) modal.classList.remove('active');
 }
 
 function openDriveModal() {
   const modalDriveInput = document.getElementById('modalDriveUrlInput');
-  if (modalDriveInput) {
-    modalDriveInput.value = appState.settings.driveScriptUrl || '';
-  }
+  if (modalDriveInput) modalDriveInput.value = appState.settings.driveScriptUrl || '';
+
+  const modalTokenInput = document.getElementById('modalDriveTokenInput');
+  if (modalTokenInput) modalTokenInput.value = appState.settings.driveToken || '';
+
   openModal('modalDrive');
 }
 
@@ -2446,11 +2786,10 @@ function formatDateBR(dateString) {
   return dateString;
 }
 
-// Service Worker for Mobile PWA
 function initPWA() {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js')
-      .then(reg => console.log('FinanceFlow ServiceWorker registered:', reg.scope))
-      .catch(err => console.log('ServiceWorker registration failed:', err));
+      .then(reg => console.log('ServiceWorker registered:', reg.scope))
+      .catch(err => console.log('ServiceWorker registration error:', err));
   }
 }
