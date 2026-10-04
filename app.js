@@ -83,60 +83,74 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
+function sanitizeAndMigrateState(rawState) {
+  let s = rawState;
+  if (!s || typeof s !== 'object') {
+    s = JSON.parse(JSON.stringify(DEFAULT_STATE));
+  }
+
+  // Ensure all collections are guaranteed arrays
+  if (!Array.isArray(s.accounts)) s.accounts = [];
+  if (!Array.isArray(s.cards)) s.cards = [];
+  if (!Array.isArray(s.fiis)) s.fiis = [];
+  if (!Array.isArray(s.transactions)) s.transactions = [];
+  if (!Array.isArray(s.purposes) || s.purposes.length === 0) {
+    s.purposes = JSON.parse(JSON.stringify(DEFAULT_STATE.purposes));
+  }
+  if (!Array.isArray(s.categories) || s.categories.length === 0) {
+    s.categories = JSON.parse(JSON.stringify(DEFAULT_STATE.categories));
+  }
+  if (!Array.isArray(s.balanceSnapshots)) s.balanceSnapshots = [];
+  if (!s.settings || typeof s.settings !== 'object') {
+    s.settings = JSON.parse(JSON.stringify(DEFAULT_STATE.settings));
+  }
+
+  // Migrate any legacy credit cards in accounts to the dedicated cards array
+  const legacyCreditAccounts = s.accounts.filter(a => a && a.type === 'credit');
+  if (legacyCreditAccounts.length > 0) {
+    legacyCreditAccounts.forEach(c => {
+      if (!s.cards.find(existing => existing.id === c.id)) {
+        s.cards.push({
+          id: c.id,
+          name: c.name,
+          bank: c.bankPreset || 'Outro',
+          limit: Number(c.creditLimit || 0),
+          invoice: Number(c.currentInvoice || 0),
+          closingDay: c.closingDay || 20,
+          dueDay: c.dueDay || 1,
+          purpose: c.purpose || 'pessoal',
+          color: c.color || '#820ad1'
+        });
+      }
+    });
+    s.accounts = s.accounts.filter(a => a && a.type !== 'credit');
+  }
+
+  // Migrate legacy FIIs (if they have shares/currentPrice instead of balance)
+  s.fiis.forEach(f => {
+    if (f) {
+      if (f.balance === undefined) {
+        f.balance = (Number(f.shares) || 1) * (Number(f.currentPrice) || Number(f.avgPrice) || 0);
+      }
+      if (f.monthlyDividend === undefined) {
+        f.monthlyDividend = (Number(f.shares) || 1) * (Number(f.lastDividend) || 0);
+      }
+    }
+  });
+
+  return s;
+}
+
 function initAppState() {
   const localData = localStorage.getItem('financeflow_state');
   if (localData) {
     try {
-      appState = JSON.parse(localData);
-      
-      // Auto-migrate schema
-      if (!appState.cards) appState.cards = [];
-      if (!appState.accounts) appState.accounts = [];
-      if (!appState.fiis) appState.fiis = [];
-      if (!appState.transactions) appState.transactions = [];
-      if (!appState.purposes) appState.purposes = DEFAULT_STATE.purposes;
-      if (!appState.categories) appState.categories = DEFAULT_STATE.categories;
-      if (!appState.balanceSnapshots) appState.balanceSnapshots = [];
-      if (!appState.settings) appState.settings = DEFAULT_STATE.settings;
-
-      // Migrate any legacy credit cards in accounts to the dedicated cards array
-      const legacyCreditAccounts = appState.accounts.filter(a => a.type === 'credit');
-      if (legacyCreditAccounts.length > 0) {
-        legacyCreditAccounts.forEach(c => {
-          if (!appState.cards.find(existing => existing.id === c.id)) {
-            appState.cards.push({
-              id: c.id,
-              name: c.name,
-              bank: c.bankPreset || 'Outro',
-              limit: Number(c.creditLimit || 0),
-              invoice: Number(c.currentInvoice || 0),
-              closingDay: c.closingDay || 20,
-              dueDay: c.dueDay || 1,
-              purpose: c.purpose || 'pessoal',
-              color: c.color || '#820ad1'
-            });
-          }
-        });
-        // Remove legacy credit accounts from bank accounts array
-        appState.accounts = appState.accounts.filter(a => a.type !== 'credit');
-      }
-
-      // Migrate legacy FIIs (if they have shares/currentPrice instead of balance)
-      appState.fiis.forEach(f => {
-        if (f.balance === undefined) {
-          f.balance = (Number(f.shares) || 1) * (Number(f.currentPrice) || Number(f.avgPrice) || 0);
-        }
-        if (f.monthlyDividend === undefined) {
-          f.monthlyDividend = (Number(f.shares) || 1) * (Number(f.lastDividend) || 0);
-        }
-      });
-
+      appState = sanitizeAndMigrateState(JSON.parse(localData));
     } catch (e) {
       console.error('Error parsing state:', e);
       appState = JSON.parse(JSON.stringify(DEFAULT_STATE));
     }
   } else {
-    // Start with empty clean state
     appState = JSON.parse(JSON.stringify(DEFAULT_STATE));
   }
 }
@@ -227,12 +241,12 @@ async function syncWithGoogleDrive(direction = 'push', isBackground = false) {
 
       if (resJson.status === 'success' && resJson.data) {
         const cloudData = resJson.data;
-        if (cloudData.accounts && Array.isArray(cloudData.accounts)) {
+        if (cloudData && typeof cloudData === 'object') {
           const currentUrl = appState.settings.driveScriptUrl;
           const currentToken = appState.settings.driveToken;
-          appState = cloudData;
-          appState.settings.driveScriptUrl = currentUrl;
-          appState.settings.driveToken = currentToken;
+          appState = sanitizeAndMigrateState(cloudData);
+          if (currentUrl) appState.settings.driveScriptUrl = currentUrl;
+          if (currentToken) appState.settings.driveToken = currentToken;
           appState.settings.lastSyncTime = new Date().toISOString();
           saveLocalStateOnly();
           renderApp();
@@ -472,6 +486,7 @@ function togglePrivacyMode() {
 // =========================================================================
 
 function renderApp() {
+  appState = sanitizeAndMigrateState(appState);
   renderPurposeSelectors();
   renderDashboard();
   renderAccountsView();
@@ -2610,9 +2625,8 @@ function importDataFromJSON(event) {
   reader.onload = function(e) {
     try {
       const imported = JSON.parse(e.target.result);
-      if (imported.accounts && Array.isArray(imported.accounts)) {
-        appState = imported;
-        if (!appState.cards) appState.cards = [];
+      if (imported && typeof imported === 'object') {
+        appState = sanitizeAndMigrateState(imported);
         saveLocalState();
         renderApp();
         showToast('Backup restaurado com sucesso!', 'success');

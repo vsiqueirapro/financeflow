@@ -129,24 +129,38 @@ function loadDataFromDrive() {
   if (files.hasNext()) {
     const file = files.next();
     const content = file.getBlob().getDataAsString();
-    return JSON.parse(content);
+    try {
+      const parsed = JSON.parse(content);
+      if (!parsed.cards) parsed.cards = [];
+      if (!parsed.accounts) parsed.accounts = [];
+      if (!parsed.fiis) parsed.fiis = [];
+      if (!parsed.transactions) parsed.transactions = [];
+      if (!parsed.balanceSnapshots) parsed.balanceSnapshots = [];
+      return parsed;
+    } catch (e) {
+      return createInitialData();
+    }
   } else {
-    // Se o arquivo ainda não existir, cria o arquivo inicial vazio
-    const initialData = {
-      accounts: [],
-      fiis: [],
-      transactions: [],
-      purposes: [
-        { id: "casa", name: "CASA", color: "#3b82f6", description: "Despesas e contas da residência / família" },
-        { id: "pessoal", name: "PESSOAL", color: "#10b981", description: "Gastos e contas particulares e individuais" }
-      ],
-      categories: [],
-      balanceSnapshots: [],
-      lastUpdated: new Date().toISOString()
-    };
-    saveDataToDrive(initialData);
-    return initialData;
+    return createInitialData();
   }
+}
+
+function createInitialData() {
+  const initialData = {
+    accounts: [],
+    cards: [],
+    fiis: [],
+    transactions: [],
+    purposes: [
+      { id: "casa", name: "CASA", color: "#3b82f6", description: "Despesas e contas da residência / família" },
+      { id: "pessoal", name: "PESSOAL", color: "#10b981", description: "Gastos e contas particulares e individuais" }
+    ],
+    categories: [],
+    balanceSnapshots: [],
+    lastUpdated: new Date().toISOString()
+  };
+  saveDataToDrive(initialData);
+  return initialData;
 }
 
 /**
