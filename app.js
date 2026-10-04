@@ -919,7 +919,7 @@ function handleAccountFormSubmit(e) {
   const type = document.getElementById('accFormType').value;
   const purpose = document.getElementById('accFormPurpose').value;
   const color = document.getElementById('accFormColor').value;
-  const balance = parseFloat(document.getElementById('accFormBalance').value) || 0;
+  const balance = parseAmountOrCalc(document.getElementById('accFormBalance').value);
 
   if (id) {
     const acc = appState.accounts.find(a => a.id === id);
@@ -1002,7 +1002,7 @@ function openAdjustBalanceModal(accId) {
 function handleAdjustBalanceSubmit(e) {
   e.preventDefault();
   const accId = document.getElementById('adjustAccId').value;
-  const newBalance = parseFloat(document.getElementById('adjustNewBalance').value);
+  const newBalance = parseAmountOrCalc(document.getElementById('adjustNewBalance').value);
   const adjustDate = document.getElementById('adjustDate').value;
   const reason = document.getElementById('adjustReason').value.trim();
 
@@ -1357,7 +1357,7 @@ function handlePayInvoiceCardChange(cardId) {
 function handlePayInvoiceSubmit(e) {
   e.preventDefault();
   const cardId = document.getElementById('payInvoiceCard').value;
-  const amount = parseFloat(document.getElementById('payInvoiceAmount').value) || 0;
+  const amount = parseAmountOrCalc(document.getElementById('payInvoiceAmount').value);
   const accountId = document.getElementById('payInvoiceAccount').value;
   const payDate = document.getElementById('payInvoiceDate').value;
 
@@ -1511,7 +1511,7 @@ function handleFiiFormSubmit(e) {
   e.preventDefault();
   const id = document.getElementById('fiiFormId').value;
   const ticker = document.getElementById('fiiFormTicker').value.trim().toUpperCase();
-  const balance = parseFloat(document.getElementById('fiiFormBalance').value) || 0;
+  const balance = parseAmountOrCalc(document.getElementById('fiiFormBalance').value);
   const monthlyDividend = parseFloat(document.getElementById('fiiFormLastDividend').value) || 0;
   const segment = document.getElementById('fiiFormSegment').value;
   const purpose = document.getElementById('fiiFormPurpose').value;
@@ -1572,7 +1572,7 @@ function openAdjustFiiModal(fiiId) {
 function handleAdjustFiiSubmit(e) {
   e.preventDefault();
   const id = document.getElementById('adjustFiiId').value;
-  const newBalance = parseFloat(document.getElementById('adjustFiiNewBalance').value) || 0;
+  const newBalance = parseAmountOrCalc(document.getElementById('adjustFiiNewBalance').value);
   const adjustDate = document.getElementById('adjustFiiDate').value;
 
   const fii = appState.fiis.find(f => f.id === id);
@@ -1836,11 +1836,128 @@ function populateCategoryOptionsInTxModal(type, selectedCatId) {
   `).join('');
 }
 
+// =========================================================================
+// MOTOR DE CÁLCULOS E EXPRESSÕES MATEMÁTICAS INLINE
+// =========================================================================
+
+function safeEvaluateMath(expr) {
+  if (!expr || typeof expr !== 'string') return null;
+  let clean = expr.trim()
+    .replace(/,/g, '.')
+    .replace(/[xX]/g, '*')
+    .replace(/÷/g, '/');
+
+  // Suporte a porcentagens: ex: "100 * 10%" -> "100 * (10/100)"
+  clean = clean.replace(/([0-9\.]+)\s*%/g, '($1/100)');
+
+  // Permite estritamente dígitos, espaços e operadores aritméticos básicos
+  if (!/^[0-9\.\+\-\*\/\(\)\s]+$/.test(clean)) {
+    return null;
+  }
+
+  // Não avalia se terminar com operador pendente (ex: "50 + ")
+  if (/[\+\-\*\/]$/.test(clean.trim())) {
+    return null;
+  }
+
+  try {
+    const result = Function(`'use strict'; return (${clean})`)();
+    if (typeof result === 'number' && !isNaN(result) && isFinite(result)) {
+      return Math.round(result * 100) / 100;
+    }
+  } catch (e) {
+    return null;
+  }
+  return null;
+}
+
+function parseAmountOrCalc(val) {
+  if (typeof val === 'number') return val;
+  if (!val) return 0;
+  const str = String(val).trim();
+  const evaluated = safeEvaluateMath(str);
+  if (evaluated !== null) return evaluated;
+  const cleaned = str.replace(',', '.');
+  return parseFloat(cleaned) || 0;
+}
+
+function handleCalcLiveInput(inputEl) {
+  const val = inputEl.value.trim();
+  const previewEl = document.getElementById(inputEl.id + '_calcResult');
+  if (!previewEl) return;
+
+  // Mostra pré-visualização quando há operadores de cálculo
+  const hasOperator = /[\+\-\*\/÷xX%]/.test(val);
+  if (!hasOperator || !val) {
+    previewEl.style.display = 'none';
+    previewEl.textContent = '';
+    return;
+  }
+
+  const res = safeEvaluateMath(val);
+  if (res !== null) {
+    previewEl.textContent = `= ${formatCurrency(res)}`;
+    previewEl.style.display = 'inline-block';
+  } else {
+    previewEl.style.display = 'none';
+  }
+}
+
+function resolveCalcExpression(inputId) {
+  const inputEl = document.getElementById(inputId);
+  if (!inputEl) return;
+  const res = safeEvaluateMath(inputEl.value);
+  if (res !== null) {
+    inputEl.value = res.toFixed(2);
+    const previewEl = document.getElementById(inputId + '_calcResult');
+    if (previewEl) previewEl.style.display = 'none';
+  }
+  inputEl.focus();
+}
+
+function handleCalcBlur(inputEl) {
+  const val = inputEl.value.trim();
+  if (!val) return;
+  const res = safeEvaluateMath(val);
+  if (res !== null) {
+    inputEl.value = res.toFixed(2);
+  }
+  const previewEl = document.getElementById(inputEl.id + '_calcResult');
+  if (previewEl) previewEl.style.display = 'none';
+}
+
+function handleCalcKeydown(event, inputEl) {
+  if (event.key === 'Enter') {
+    const val = inputEl.value.trim();
+    const res = safeEvaluateMath(val);
+    if (res !== null) {
+      inputEl.value = res.toFixed(2);
+      const previewEl = document.getElementById(inputEl.id + '_calcResult');
+      if (previewEl) previewEl.style.display = 'none';
+    }
+  }
+}
+
+function appendCalcOperator(inputId, operator) {
+  const inputEl = document.getElementById(inputId);
+  if (!inputEl) return;
+  let cur = inputEl.value.trim();
+  if (!cur) cur = '0';
+
+  if (/[\+\-\*\/]$/.test(cur)) {
+    cur = cur.slice(0, -1).trim();
+  }
+
+  inputEl.value = cur + ' ' + operator + ' ';
+  inputEl.focus();
+  handleCalcLiveInput(inputEl);
+}
+
 function handleTransactionSubmit(e) {
   e.preventDefault();
   const id = document.getElementById('txFormId').value;
   const desc = document.getElementById('txFormDesc').value.trim();
-  const amount = parseFloat(document.getElementById('txFormAmount').value) || 0;
+  const amount = parseAmountOrCalc(document.getElementById('txFormAmount').value);
   const date = document.getElementById('txFormDate').value;
   const accountId = document.getElementById('txFormAccount').value;
   const destinationAccountId = document.getElementById('txFormDestination').value;
@@ -2863,7 +2980,7 @@ async function forceAppUpdate() {
 
 function initPWA() {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js?v=2.1')
+    navigator.serviceWorker.register('./sw.js?v=2.2')
       .then(reg => {
         console.log('ServiceWorker registered:', reg.scope);
         // Force check for updates every time

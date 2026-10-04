@@ -1730,3 +1730,106 @@ a:hover {
 .mt-4 { margin-top: 20px; }
 .pt-3 { padding-top: 12px; }
 .border-top { border-top: 1px solid var(--border-subtle); }
+
+/* =========================================================================
+   INLINE CALCULATOR STYLES
+   ========================================================================= */
+
+.label-calc-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.calc-badge-indicator {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  padding: 2px 7px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.calc-input-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.calc-eval-input {
+  width: 100%;
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 1.05rem !important;
+  font-weight: 600 !important;
+  padding-right: 120px !important;
+}
+
+.calc-live-result {
+  position: absolute;
+  right: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.18);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  padding: 3px 8px;
+  border-radius: 6px;
+  pointer-events: none;
+  white-space: nowrap;
+  animation: fadeIn 0.15s ease-in;
+  display: none;
+}
+
+.calc-quick-keys {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.btn-calc-key {
+  flex: 1;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.95rem;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.btn-calc-key:hover {
+  background: rgba(99, 102, 241, 0.2);
+  color: #fff;
+  border-color: rgba(99, 102, 241, 0.4);
+  transform: translateY(-1px);
+}
+
+.btn-calc-key:active {
+  transform: scale(0.96);
+}
+
+.btn-calc-equal {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+  border-color: rgba(16, 185, 129, 0.4);
+}
+
+.btn-calc-equal:hover {
+  background: rgba(16, 185, 129, 0.35);
+  color: #fff;
+  border-color: rgba(16, 185, 129, 0.6);
+}
