@@ -2800,10 +2800,57 @@ function formatDateBR(dateString) {
   return dateString;
 }
 
+async function forceAppUpdate() {
+  showToast('Limpando cache e forçando atualização...', 'info');
+  try {
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      for (const reg of registrations) {
+        await reg.unregister();
+      }
+    }
+    if ('caches' in window) {
+      const cacheKeys = await caches.keys();
+      for (const key of cacheKeys) {
+        await caches.delete(key);
+      }
+    }
+    setTimeout(() => {
+      window.location.reload();
+    }, 400);
+  } catch (e) {
+    console.error('Error forcing update:', e);
+    window.location.reload();
+  }
+}
+
 function initPWA() {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js')
-      .then(reg => console.log('ServiceWorker registered:', reg.scope))
+    navigator.serviceWorker.register('./sw.js?v=2.1')
+      .then(reg => {
+        console.log('ServiceWorker registered:', reg.scope);
+        // Force check for updates every time
+        reg.update().catch(() => {});
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+          if (newWorker) {
+            newWorker.addEventListener('statechange', () => {
+              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                console.log('Nova versão do FinanceFlow detectada. Atualizando página...');
+                window.location.reload();
+              }
+            });
+          }
+        });
+      })
       .catch(err => console.log('ServiceWorker registration error:', err));
+
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!refreshing) {
+        refreshing = true;
+        window.location.reload();
+      }
+    });
   }
 }

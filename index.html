@@ -18,7 +18,7 @@
   <!-- Chart.js via CDN -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=2.1">
 </head>
 <body class="dark-theme">
   <!-- APP WRAPPER -->
@@ -899,6 +899,23 @@
             </div>
           </div>
 
+          <!-- VERSÃO E ATUALIZAÇÃO DO APLICATIVO -->
+          <div class="settings-card mt-4">
+            <div class="card-head-between">
+              <div>
+                <h3 class="settings-card-title">Versão do Aplicativo (PWA)</h3>
+                <p class="settings-card-subtitle">Versão Atual: <strong>v2.1 PRO</strong> (Estratégia Network-First ativa)</p>
+              </div>
+              <button class="btn-secondary" onclick="forceAppUpdate()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                <span>Forçar Atualização & Limpar Cache</span>
+              </button>
+            </div>
+            <p style="font-size: 0.8rem; color: var(--text-dim); margin-top: 10px;">
+              💡 Caso seu navegador tenha mantido arquivos antigos na memória, este botão limpa o cache do Service Worker e recarrega a versão mais recente diretamente do GitHub.
+            </p>
+          </div>
+
         </section>
 
       </div> <!-- end content-scrollable -->
@@ -1446,6 +1463,6 @@
   <div id="toastContainer" class="toast-container"></div>
 
   <!-- JAVASCRIPT PRINCIPAL -->
-  <script src="app.js"></script>
+  <script src="app.js?v=2.1"></script>
 </body>
 </html>
