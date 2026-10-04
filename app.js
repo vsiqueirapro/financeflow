@@ -138,6 +138,14 @@ function sanitizeAndMigrateState(rawState) {
     }
   });
 
+  // Ensure card invoices and next invoices are guaranteed numbers
+  s.cards.forEach(c => {
+    if (c) {
+      c.invoice = Number(c.invoice || 0);
+      c.nextInvoice = Number(c.nextInvoice || 0);
+    }
+  });
+
   return s;
 }
 
@@ -780,7 +788,11 @@ function renderDashboardRecentTransactions(transactions) {
 function getTxOriginLabel(tx) {
   if (tx.originType === 'card' || tx.cardId) {
     const card = appState.cards.find(c => c.id === (tx.cardId || tx.accountId));
-    return card ? `💳 ${card.name}` : '💳 Cartão de Crédito';
+    const cardName = card ? `💳 ${card.name}` : '💳 Cartão de Crédito';
+    const cycle = tx.invoiceCycle || (card ? getCardInvoiceCycleInfo(card, tx.date).cycle : 'current');
+    const isNext = cycle === 'next';
+    const cycleBadge = `<span class="badge-cycle ${isNext ? 'cycle-next' : 'cycle-current'}" style="margin-left:4px;">${isNext ? 'Próx. Fatura' : 'Fatura Atual'}</span>`;
+    return `<div style="display:flex; flex-direction:column; gap:2px;"><span>${cardName}</span><div>${cycleBadge}</div></div>`;
   } else {
     const acc = appState.accounts.find(a => a.id === tx.accountId);
     return acc ? `🏦 ${acc.name}` : '🏦 Conta Bancária';
@@ -788,8 +800,33 @@ function getTxOriginLabel(tx) {
 }
 
 // =========================================================================
-// ACCOUNTS VIEW (CONTAS BANCÁRIAS)
+// ACCOUNTS VIEW (CONTAS BANCÁRIAS) - DUAL MODE (CARDS vs PLANILHA)
 // =========================================================================
+
+let accountsViewMode = localStorage.getItem('financeflow_accounts_view_mode') || 'cards';
+
+function setAccountsViewMode(mode) {
+  accountsViewMode = mode;
+  localStorage.setItem('financeflow_accounts_view_mode', mode);
+
+  const btnCards = document.getElementById('btnModeAccountsCards');
+  const btnSpreadsheet = document.getElementById('btnModeAccountsSpreadsheet');
+  const cardsGrid = document.getElementById('accountsCardsGrid');
+  const spreadsheetContainer = document.getElementById('accountsSpreadsheetContainer');
+
+  if (mode === 'spreadsheet') {
+    btnCards?.classList.remove('active');
+    btnSpreadsheet?.classList.add('active');
+    cardsGrid?.classList.add('hidden');
+    spreadsheetContainer?.classList.remove('hidden');
+    renderAccountsSpreadsheet();
+  } else {
+    btnSpreadsheet?.classList.remove('active');
+    btnCards?.classList.add('active');
+    spreadsheetContainer?.classList.add('hidden');
+    cardsGrid?.classList.remove('hidden');
+  }
+}
 
 function getFilteredAccounts() {
   if (globalSelectedPurpose === 'ALL') return appState.accounts;
@@ -824,54 +861,215 @@ function renderAccountsView() {
         <button class="btn-primary" onclick="openNewAccountModal()">+ Cadastrar Minha Primeira Conta Bancária</button>
       </div>
     `;
+  } else {
+    container.innerHTML = accounts.map(acc => {
+      const purposeObj = appState.purposes.find(p => p.id === acc.purpose) || { name: acc.purpose || 'PESSOAL', color: '#10b981' };
+      const preset = BANK_PRESETS[acc.bankPreset] || { color: acc.color || '#6366f1', logo: 'BANK' };
+      const cardColor = acc.color || preset.color;
+
+      return `
+        <div class="bank-card-item" style="border-top: 4px solid ${cardColor}">
+          <div class="card-top-row">
+            <div class="card-bank-badge">
+              <div class="card-chip"></div>
+              <div>
+                <span class="card-bank-name">${acc.name}</span>
+                <div style="font-size: 0.72rem; color: var(--text-muted)">${acc.bankPreset || 'Banco'} • ${getAccountTypeLabel(acc.type)}</div>
+              </div>
+            </div>
+            <span class="card-purpose-badge" style="color: ${purposeObj.color}; border-color: ${purposeObj.color}50; background: ${purposeObj.color}20">
+              ${purposeObj.name}
+            </span>
+          </div>
+
+          <div class="card-balance-block">
+            <span class="card-balance-label">Saldo Disponível Real</span>
+            <div class="card-balance-val">
+              ${formatCurrency(acc.balance)}
+            </div>
+          </div>
+
+          <div class="card-actions-row">
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+              <button class="btn-action-pill" onclick="openAdjustBalanceModal('${acc.id}')" title="Ajustar saldo e registrar evolução">
+                ⚖️ Ajustar Saldo
+              </button>
+              <button class="btn-action-pill" onclick="viewAccountEvolution('${acc.id}')" title="Ver demonstrativo de evolução desta conta">
+                📈 Evolução
+              </button>
+            </div>
+            <div>
+              <button class="btn-icon-sm" onclick="editAccount('${acc.id}')" title="Editar Conta">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+              </button>
+              <button class="btn-icon-sm" onclick="deleteAccount('${acc.id}')" title="Excluir Conta">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  // Render spreadsheet view
+  renderAccountsSpreadsheet();
+
+  // Apply persisted view mode
+  setAccountsViewMode(accountsViewMode);
+
+  // Populate snapshots account filter & render table
+  populateSnapshotAccountFilter();
+  renderBalanceSnapshotsTable();
+}
+
+function renderAccountsSpreadsheet() {
+  const tbody = document.getElementById('accountsSpreadsheetBody');
+  const tfoot = document.getElementById('accountsSpreadsheetFoot');
+  if (!tbody) return;
+
+  const accounts = getFilteredAccounts();
+
+  if (accounts.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 24px;">Nenhuma conta encontrada.</td></tr>`;
+    if (tfoot) tfoot.innerHTML = '';
     return;
   }
 
-  container.innerHTML = accounts.map(acc => {
+  let totalBal = 0;
+
+  tbody.innerHTML = accounts.map(acc => {
     const purposeObj = appState.purposes.find(p => p.id === acc.purpose) || { name: acc.purpose || 'PESSOAL', color: '#10b981' };
-    const preset = BANK_PRESETS[acc.bankPreset] || { color: acc.color || '#6366f1', logo: 'BANK' };
-    const cardColor = acc.color || preset.color;
+    const bal = Number(acc.balance || 0);
+    totalBal += bal;
+
+    const snaps = (appState.balanceSnapshots || []).filter(s => s.accountId === acc.id).sort((a,b) => new Date(a.date) - new Date(b.date));
+    const initialBal = snaps.length > 0 ? Number(snaps[0].oldBalance !== undefined ? snaps[0].oldBalance : (snaps[0].newBalance || 0)) : bal;
+    const lastSnap = snaps.length > 0 ? snaps[snaps.length - 1] : null;
+    const lastUpdateStr = lastSnap ? formatDateBR(lastSnap.date) : 'Inicial';
 
     return `
-      <div class="bank-card-item" style="border-top: 4px solid ${cardColor}">
-        <div class="card-top-row">
-          <div class="card-bank-badge">
-            <div class="card-chip"></div>
-            <div>
-              <span class="card-bank-name">${acc.name}</span>
-              <div style="font-size: 0.72rem; color: var(--text-muted)">${acc.bankPreset || 'Banco'} • ${getAccountTypeLabel(acc.type)}</div>
-            </div>
-          </div>
+      <tr id="row_acc_${acc.id}">
+        <td>
+          <span style="display:inline-flex; align-items:center; gap:6px;">
+            <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:${acc.color || '#6366f1'}"></span>
+            <strong>${acc.bankPreset || 'Banco'}</strong>
+          </span>
+        </td>
+        <td><strong>${acc.name}</strong></td>
+        <td><small style="color:var(--text-muted)">${getAccountTypeLabel(acc.type)}</small></td>
+        <td>
           <span class="card-purpose-badge" style="color: ${purposeObj.color}; border-color: ${purposeObj.color}50; background: ${purposeObj.color}20">
             ${purposeObj.name}
           </span>
-        </div>
-
-        <div class="card-balance-block">
-          <span class="card-balance-label">Saldo Disponível Real</span>
-          <div class="card-balance-val">
-            ${formatCurrency(acc.balance)}
-          </div>
-        </div>
-
-        <div class="card-actions-row">
-          <button class="btn-action-pill" onclick="openAdjustBalanceModal('${acc.id}')" title="Ajustar saldo e registrar evolução">
-            ⚖️ Ajustar Saldo
-          </button>
-          <div>
+        </td>
+        <td class="cell-align-right">
+          <input type="text" class="spreadsheet-input" value="${bal.toFixed(2)}"
+            title="Clique para editar o saldo diretamente. Aceita contas como 1500+250"
+            onblur="handleSpreadsheetAccountBalanceBlur(this, '${acc.id}')"
+            onkeydown="handleSpreadsheetKeydown(event, this)">
+        </td>
+        <td class="cell-align-right" style="color:var(--text-muted); font-family: 'JetBrains Mono', monospace;">
+          ${formatCurrency(initialBal)}
+        </td>
+        <td style="font-size:0.8rem; color:var(--text-dim);">
+          ${lastUpdateStr}
+        </td>
+        <td class="cell-align-center">
+          <div style="display:inline-flex; gap:4px;">
+            <button class="btn-action-pill" onclick="viewAccountEvolution('${acc.id}')" title="Ver demonstrativo de evolução">
+              📈 Evolução
+            </button>
             <button class="btn-icon-sm" onclick="editAccount('${acc.id}')" title="Editar Conta">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
             </button>
             <button class="btn-icon-sm" onclick="deleteAccount('${acc.id}')" title="Excluir Conta">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
             </button>
           </div>
-        </div>
-      </div>
+        </td>
+      </tr>
     `;
   }).join('');
 
-  renderBalanceSnapshotsTable();
+  if (tfoot) {
+    tfoot.innerHTML = `
+      <tr>
+        <td colspan="4"><strong>TOTAL GERAL (${accounts.length} contas)</strong></td>
+        <td class="cell-align-right" style="font-family: 'JetBrains Mono', monospace; font-size:1rem; color:var(--brand-primary);">
+          <strong>${formatCurrency(totalBal)}</strong>
+        </td>
+        <td colspan="3"></td>
+      </tr>
+    `;
+  }
+}
+
+function handleSpreadsheetAccountBalanceBlur(inputEl, accId) {
+  const acc = appState.accounts.find(a => a.id === accId);
+  if (!acc) return;
+
+  const raw = inputEl.value;
+  const newBal = parseAmountOrCalc(raw);
+  const oldBal = Number(acc.balance || 0);
+
+  if (Math.abs(oldBal - newBal) > 0.001) {
+    acc.balance = newBal;
+    inputEl.value = newBal.toFixed(2);
+    inputEl.classList.add('cell-saved-flash');
+    setTimeout(() => inputEl.classList.remove('cell-saved-flash'), 1000);
+
+    // Record evolution snapshot
+    appState.balanceSnapshots.push({
+      id: 'snap_' + Date.now(),
+      date: new Date().toISOString(),
+      accountId: acc.id,
+      oldBalance: oldBal,
+      newBalance: newBal,
+      diff: newBal - oldBal,
+      reason: 'Ajuste direto via Planilha'
+    });
+
+    saveLocalState();
+    renderApp();
+    showToast(`Saldo de "${acc.name}" atualizado para ${formatCurrency(newBal)}!`, 'success');
+  } else {
+    inputEl.value = newBal.toFixed(2);
+  }
+}
+
+function handleSpreadsheetKeydown(e, inputEl) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    inputEl.blur();
+  }
+}
+
+function exportAccountsToCSV() {
+  const accounts = getFilteredAccounts();
+  if (accounts.length === 0) {
+    showToast('Nenhuma conta para exportar.', 'warning');
+    return;
+  }
+  let csv = 'Banco;Nome da Conta;Tipo;Finalidade;Saldo Atual;Saldo Inicial\n';
+  accounts.forEach(a => {
+    const snaps = (appState.balanceSnapshots || []).filter(s => s.accountId === a.id).sort((x,y) => new Date(x.date) - new Date(y.date));
+    const initBal = snaps.length > 0 ? (snaps[0].oldBalance !== undefined ? snaps[0].oldBalance : snaps[0].newBalance) : a.balance;
+    csv += `"${a.bankPreset || 'Banco'}";"${a.name}";"${getAccountTypeLabel(a.type)}";"${a.purpose}";"${Number(a.balance || 0).toFixed(2)}";"${Number(initBal || 0).toFixed(2)}"\n`;
+  });
+  downloadCSVFile(csv, 'FinanceFlow_Contas_Bancarias.csv');
+}
+
+function downloadCSVFile(content, filename) {
+  const blob = new Blob(["\ufeff" + content], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  showToast('Planilha CSV gerada com sucesso!', 'success');
 }
 
 function getAccountTypeLabel(type) {
@@ -886,6 +1084,8 @@ function getAccountTypeLabel(type) {
 
 function openNewAccountModal() {
   document.getElementById('modalAccountTitle').textContent = 'Cadastrar Conta Bancária';
+  const balLabel = document.getElementById('accFormBalanceLabel');
+  if (balLabel) balLabel.textContent = 'Saldo Inicial da Conta (R$) *';
   document.getElementById('formAccount').reset();
   document.getElementById('accFormId').value = '';
   document.getElementById('accFormBalance').value = '0.00';
@@ -900,12 +1100,14 @@ function editAccount(accId) {
   if (!acc) return;
 
   document.getElementById('modalAccountTitle').textContent = 'Editar Conta Bancária';
+  const balLabel = document.getElementById('accFormBalanceLabel');
+  if (balLabel) balLabel.textContent = 'Saldo Atual da Conta (R$) *';
   document.getElementById('accFormId').value = acc.id;
   document.getElementById('accFormName').value = acc.name;
   document.getElementById('accFormBankPreset').value = acc.bankPreset || 'Outro';
   document.getElementById('accFormType').value = acc.type || 'checking';
   document.getElementById('accFormColor').value = acc.color || '#820ad1';
-  document.getElementById('accFormBalance').value = acc.balance || '0.00';
+  document.getElementById('accFormBalance').value = Number(acc.balance || 0).toFixed(2);
 
   populatePurposeOptions('accFormPurpose', acc.purpose);
   openModal('modalAccount');
@@ -924,12 +1126,26 @@ function handleAccountFormSubmit(e) {
   if (id) {
     const acc = appState.accounts.find(a => a.id === id);
     if (acc) {
+      const oldBal = Number(acc.balance || 0);
       acc.name = name;
       acc.bankPreset = bankPreset;
       acc.type = type;
       acc.purpose = purpose;
       acc.color = color;
-      acc.balance = balance;
+
+      if (Math.abs(oldBal - balance) > 0.001) {
+        acc.balance = balance;
+        appState.balanceSnapshots.push({
+          id: 'snap_' + Date.now(),
+          date: new Date().toISOString(),
+          accountId: acc.id,
+          oldBalance: oldBal,
+          newBalance: balance,
+          diff: balance - oldBal,
+          reason: 'Ajuste de Saldo ao Editar Conta'
+        });
+      }
+
       showToast('Conta bancária atualizada com sucesso!', 'success');
     }
   } else {
@@ -1030,6 +1246,50 @@ function handleAdjustBalanceSubmit(e) {
   showToast('Saldo ajustado e registrado no histórico de evolução!', 'success');
 }
 
+let currentSnapshotAccountFilter = 'ALL';
+
+function populateSnapshotAccountFilter() {
+  const select = document.getElementById('snapshotAccountFilter');
+  if (!select) return;
+
+  const currentVal = select.value || currentSnapshotAccountFilter;
+  let optionsHtml = '<option value="ALL">Todas as Contas</option>';
+  appState.accounts.forEach(acc => {
+    optionsHtml += `<option value="${acc.id}">${acc.name}</option>`;
+  });
+  select.innerHTML = optionsHtml;
+  if (appState.accounts.some(a => a.id === currentVal) || currentVal === 'ALL') {
+    select.value = currentVal;
+    currentSnapshotAccountFilter = currentVal;
+  }
+}
+
+function handleSnapshotAccountFilterChange(accId) {
+  currentSnapshotAccountFilter = accId;
+  renderBalanceSnapshotsTable();
+}
+
+function viewAccountEvolution(accId) {
+  if (currentActiveView !== 'accounts') {
+    switchView('accounts');
+  }
+  const select = document.getElementById('snapshotAccountFilter');
+  if (select) {
+    select.value = accId;
+    handleSnapshotAccountFilterChange(accId);
+  }
+  const target = document.getElementById('accountEvolutionStatementBlock');
+  if (target) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    target.classList.add('highlight-row-target');
+    setTimeout(() => target.classList.remove('highlight-row-target'), 2000);
+  }
+  const acc = appState.accounts.find(a => a.id === accId);
+  if (acc) {
+    showToast(`Visualizando demonstrativo de evolução: ${acc.name}`, 'info');
+  }
+}
+
 function renderBalanceSnapshotsTable() {
   const tbody = document.getElementById('balanceSnapshotsBody');
   if (!tbody) return;
@@ -1039,7 +1299,16 @@ function renderBalanceSnapshotsTable() {
     return;
   }
 
-  const sorted = [...appState.balanceSnapshots].sort((a, b) => new Date(b.date) - new Date(a.date));
+  const rawSnaps = currentSnapshotAccountFilter === 'ALL'
+    ? appState.balanceSnapshots
+    : appState.balanceSnapshots.filter(s => s.accountId === currentSnapshotAccountFilter);
+
+  if (rawSnaps.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-dim); padding: 20px;">Nenhum histórico de ajuste registrado para esta conta selecionada.</td></tr>`;
+    return;
+  }
+
+  const sorted = [...rawSnaps].sort((a, b) => new Date(b.date) - new Date(a.date));
 
   tbody.innerHTML = sorted.map(snap => {
     const acc = appState.accounts.find(a => a.id === snap.accountId) || { name: 'Conta Excluída', purpose: 'casa' };
@@ -1067,8 +1336,33 @@ function renderBalanceSnapshotsTable() {
 }
 
 // =========================================================================
-// VIEW: CARTÕES DE CRÉDITO (AMBIENTE DEDICADO)
+// VIEW: CARTÕES DE CRÉDITO (AMBIENTE DEDICADO) - DUAL MODE (CARDS vs PLANILHA)
 // =========================================================================
+
+let cardsViewMode = localStorage.getItem('financeflow_cards_view_mode') || 'cards';
+
+function setCardsViewMode(mode) {
+  cardsViewMode = mode;
+  localStorage.setItem('financeflow_cards_view_mode', mode);
+
+  const btnCards = document.getElementById('btnModeCardsCards');
+  const btnSpreadsheet = document.getElementById('btnModeCardsSpreadsheet');
+  const cardsGrid = document.getElementById('creditCardsGrid');
+  const spreadsheetContainer = document.getElementById('cardsSpreadsheetContainer');
+
+  if (mode === 'spreadsheet') {
+    btnCards?.classList.remove('active');
+    btnSpreadsheet?.classList.add('active');
+    cardsGrid?.classList.add('hidden');
+    spreadsheetContainer?.classList.remove('hidden');
+    renderCardsSpreadsheet();
+  } else {
+    btnSpreadsheet?.classList.remove('active');
+    btnCards?.classList.add('active');
+    spreadsheetContainer?.classList.add('hidden');
+    cardsGrid?.classList.remove('hidden');
+  }
+}
 
 function getFilteredCards() {
   if (globalSelectedPurpose === 'ALL') return appState.cards;
@@ -1089,14 +1383,16 @@ function renderCardsView() {
   const cards = getFilteredCards();
 
   let totalInvoice = 0;
+  let totalNextInvoice = 0;
   let totalLimit = 0;
 
   appState.cards.forEach(c => {
     totalInvoice += Number(c.invoice || 0);
+    totalNextInvoice += Number(c.nextInvoice || 0);
     totalLimit += Number(c.limit || 0);
   });
 
-  const totalAvailable = Math.max(0, totalLimit - totalInvoice);
+  const totalAvailable = Math.max(0, totalLimit - (totalInvoice + totalNextInvoice));
 
   document.getElementById('cardsTotalInvoiceVal').textContent = formatCurrency(totalInvoice);
   document.getElementById('cardsTotalLimitVal').textContent = formatCurrency(totalLimit);
@@ -1109,71 +1405,266 @@ function renderCardsView() {
         <button class="btn-primary" onclick="openNewCreditCardModal()">+ Cadastrar Cartão de Crédito</button>
       </div>
     `;
-    renderCardTransactionsTable([]);
-    return;
-  }
+  } else {
+    container.innerHTML = cards.map(card => {
+      const purposeObj = appState.purposes.find(p => p.id === card.purpose) || { name: card.purpose || 'PESSOAL', color: '#10b981' };
+      const inv = Number(card.invoice || 0);
+      const nextInv = Number(card.nextInvoice || 0);
+      const lim = Number(card.limit || 0);
+      const available = Math.max(0, lim - (inv + nextInv));
+      const cardColor = card.color || '#820ad1';
 
-  container.innerHTML = cards.map(card => {
-    const purposeObj = appState.purposes.find(p => p.id === card.purpose) || { name: card.purpose || 'PESSOAL', color: '#10b981' };
-    const available = Math.max(0, Number(card.limit || 0) - Number(card.invoice || 0));
-    const cardColor = card.color || '#820ad1';
+      return `
+        <div class="bank-card-item" style="border-top: 4px solid ${cardColor}">
+          <div class="card-top-row">
+            <div class="card-bank-badge">
+              <div class="card-chip"></div>
+              <div>
+                <span class="card-bank-name">${card.name}</span>
+                <div style="font-size: 0.72rem; color: var(--text-muted)">${card.bank} • Cartão de Crédito</div>
+              </div>
+            </div>
+            <span class="card-purpose-badge" style="color: ${purposeObj.color}; border-color: ${purposeObj.color}50; background: ${purposeObj.color}20">
+              ${purposeObj.name}
+            </span>
+          </div>
 
-    return `
-      <div class="bank-card-item" style="border-top: 4px solid ${cardColor}">
-        <div class="card-top-row">
-          <div class="card-bank-badge">
-            <div class="card-chip"></div>
-            <div>
-              <span class="card-bank-name">${card.name}</span>
-              <div style="font-size: 0.72rem; color: var(--text-muted)">${card.bank} • Cartão de Crédito</div>
+          <div class="card-balance-block">
+            <div style="display:flex; justify-content:space-between; align-items:baseline;">
+              <span class="card-balance-label">Fatura Atual (a pagar)</span>
+              <span class="badge-cycle cycle-current">Fecha dia ${card.closingDay || 20}</span>
+            </div>
+            <div class="card-balance-val color-expense">
+              -${formatCurrency(inv)}
             </div>
           </div>
-          <span class="card-purpose-badge" style="color: ${purposeObj.color}; border-color: ${purposeObj.color}50; background: ${purposeObj.color}20">
-            ${purposeObj.name}
-          </span>
-        </div>
 
-        <div class="card-balance-block">
-          <span class="card-balance-label">Fatura Atual a Pagar</span>
-          <div class="card-balance-val color-expense">
-            -${formatCurrency(card.invoice)}
+          <div class="card-next-invoice-row">
+            <span>Próxima Fatura:</span>
+            <strong class="color-warning">-${formatCurrency(nextInv)}</strong>
+          </div>
+
+          <div class="card-credit-details" style="margin-top: 8px;">
+            <span>Limite Total: <strong>${formatCurrency(lim)}</strong></span>
+            <span>Disponível: <strong class="color-emerald">${formatCurrency(available)}</strong></span>
+          </div>
+          <div class="card-credit-details">
+            <span>Fecha dia <strong>${card.closingDay || 20}</strong></span>
+            <span>Vence dia <strong>${card.dueDay || 1}</strong></span>
+          </div>
+
+          <div class="card-actions-row">
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+              <button class="btn-action-pill" onclick="openNewCardExpenseModal('${card.id}')" title="Lançar compra neste cartão">
+                💳 + Despesa
+              </button>
+              <button class="btn-action-pill" onclick="openPayInvoiceModal('${card.id}')" title="Pagar e abater fatura">
+                ✅ Pagar Fatura
+              </button>
+              ${nextInv > 0 ? `
+              <button class="btn-action-pill" onclick="cardRolloverInvoice('${card.id}')" title="Virar ciclo da fatura">
+                📅 Virar Ciclo
+              </button>` : ''}
+            </div>
+            <div>
+              <button class="btn-icon-sm" onclick="editCreditCard('${card.id}')" title="Editar Cartão">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+              </button>
+              <button class="btn-icon-sm" onclick="deleteCreditCard('${card.id}')" title="Excluir Cartão">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+              </button>
+            </div>
           </div>
         </div>
+      `;
+    }).join('');
+  }
 
-        <div class="card-credit-details">
-          <span>Limite: <strong>${formatCurrency(card.limit)}</strong></span>
-          <span>Disponível: <strong class="color-emerald">${formatCurrency(available)}</strong></span>
-        </div>
-        <div class="card-credit-details">
-          <span>Fecha dia <strong>${card.closingDay || '--'}</strong></span>
-          <span>Vence dia <strong>${card.dueDay || '--'}</strong></span>
-        </div>
+  // Render spreadsheet view
+  renderCardsSpreadsheet();
 
-        <div class="card-actions-row">
-          <div>
-            <button class="btn-action-pill" onclick="openNewCardExpenseModal('${card.id}')" title="Lançar compra neste cartão">
-              💳 + Despesa
-            </button>
-            <button class="btn-action-pill" onclick="openPayInvoiceModal('${card.id}')" title="Pagar e abater fatura">
-              ✅ Pagar Fatura
-            </button>
-          </div>
-          <div>
-            <button class="btn-icon-sm" onclick="editCreditCard('${card.id}')" title="Editar Cartão">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
-            </button>
-            <button class="btn-icon-sm" onclick="deleteCreditCard('${card.id}')" title="Excluir Cartão">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
-            </button>
-          </div>
-        </div>
-      </div>
-    `;
-  }).join('');
+  // Apply persisted view mode
+  setCardsViewMode(cardsViewMode);
 
   // Render credit card expenses
   const cardTxs = appState.transactions.filter(t => t.originType === 'card' || appState.cards.some(c => c.id === t.accountId));
   renderCardTransactionsTable(cardTxs);
+}
+
+function renderCardsSpreadsheet() {
+  const tbody = document.getElementById('cardsSpreadsheetBody');
+  const tfoot = document.getElementById('cardsSpreadsheetFoot');
+  if (!tbody) return;
+
+  const cards = getFilteredCards();
+
+  if (cards.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 24px;">Nenhum cartão cadastrado.</td></tr>`;
+    if (tfoot) tfoot.innerHTML = '';
+    return;
+  }
+
+  let totalInvoice = 0;
+  let totalNextInvoice = 0;
+  let totalLimit = 0;
+  let totalAvailable = 0;
+
+  tbody.innerHTML = cards.map(card => {
+    const purposeObj = appState.purposes.find(p => p.id === card.purpose) || { name: card.purpose || 'PESSOAL', color: '#10b981' };
+    const inv = Number(card.invoice || 0);
+    const nextInv = Number(card.nextInvoice || 0);
+    const lim = Number(card.limit || 0);
+    const avail = Math.max(0, lim - (inv + nextInv));
+
+    totalInvoice += inv;
+    totalNextInvoice += nextInv;
+    totalLimit += lim;
+    totalAvailable += avail;
+
+    return `
+      <tr id="row_card_${card.id}">
+        <td>
+          <span style="display:inline-flex; align-items:center; gap:6px;">
+            <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:${card.color || '#820ad1'}"></span>
+            <strong>💳 ${card.name}</strong>
+          </span>
+          <div style="font-size:0.72rem; color:var(--text-muted)">${card.bank || 'Banco'}</div>
+        </td>
+        <td>
+          <span class="card-purpose-badge" style="color: ${purposeObj.color}; border-color: ${purposeObj.color}50; background: ${purposeObj.color}20">
+            ${purposeObj.name}
+          </span>
+        </td>
+        <td class="cell-align-right">
+          <input type="text" class="spreadsheet-input color-expense" value="${inv.toFixed(2)}"
+            title="Editar fatura atual diretamente"
+            onblur="handleSpreadsheetCardFieldBlur(this, '${card.id}', 'invoice')"
+            onkeydown="handleSpreadsheetKeydown(event, this)">
+        </td>
+        <td class="cell-align-right" style="font-family: 'JetBrains Mono', monospace; color:var(--warning);">
+          -${formatCurrency(nextInv)}
+        </td>
+        <td class="cell-align-right">
+          <input type="text" class="spreadsheet-input" value="${lim.toFixed(2)}"
+            title="Editar limite total de crédito"
+            onblur="handleSpreadsheetCardFieldBlur(this, '${card.id}', 'limit')"
+            onkeydown="handleSpreadsheetKeydown(event, this)">
+        </td>
+        <td class="cell-align-right color-emerald" style="font-family: 'JetBrains Mono', monospace; font-weight:700;">
+          ${formatCurrency(avail)}
+        </td>
+        <td class="cell-align-center">
+          <input type="number" min="1" max="31" class="spreadsheet-input" style="width:60px; text-align:center;" value="${card.closingDay || 20}"
+            title="Dia de fechamento"
+            onblur="handleSpreadsheetCardFieldBlur(this, '${card.id}', 'closingDay')"
+            onkeydown="handleSpreadsheetKeydown(event, this)">
+        </td>
+        <td class="cell-align-center">
+          <input type="number" min="1" max="31" class="spreadsheet-input" style="width:60px; text-align:center;" value="${card.dueDay || 1}"
+            title="Dia de vencimento"
+            onblur="handleSpreadsheetCardFieldBlur(this, '${card.id}', 'dueDay')"
+            onkeydown="handleSpreadsheetKeydown(event, this)">
+        </td>
+        <td class="cell-align-center">
+          <div style="display:inline-flex; gap:4px;">
+            <button class="btn-action-pill" onclick="openNewCardExpenseModal('${card.id}')" title="Lançar despesa">
+              💳 + Despesa
+            </button>
+            <button class="btn-action-pill" onclick="openPayInvoiceModal('${card.id}')" title="Pagar fatura">
+              ✅ Pagar
+            </button>
+            <button class="btn-icon-sm" onclick="editCreditCard('${card.id}')" title="Editar">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+            </button>
+            <button class="btn-icon-sm" onclick="deleteCreditCard('${card.id}')" title="Excluir">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+            </button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  if (tfoot) {
+    tfoot.innerHTML = `
+      <tr>
+        <td colspan="2"><strong>TOTAIS CONSOLIDADOS (${cards.length} cartões)</strong></td>
+        <td class="cell-align-right color-expense" style="font-family: 'JetBrains Mono', monospace; font-size:1rem;">
+          <strong>-${formatCurrency(totalInvoice)}</strong>
+        </td>
+        <td class="cell-align-right color-warning" style="font-family: 'JetBrains Mono', monospace;">
+          <strong>-${formatCurrency(totalNextInvoice)}</strong>
+        </td>
+        <td class="cell-align-right" style="font-family: 'JetBrains Mono', monospace;">
+          <strong>${formatCurrency(totalLimit)}</strong>
+        </td>
+        <td class="cell-align-right color-emerald" style="font-family: 'JetBrains Mono', monospace; font-size:1rem;">
+          <strong>${formatCurrency(totalAvailable)}</strong>
+        </td>
+        <td colspan="3"></td>
+      </tr>
+    `;
+  }
+}
+
+function handleSpreadsheetCardFieldBlur(inputEl, cardId, field) {
+  const card = appState.cards.find(c => c.id === cardId);
+  if (!card) return;
+
+  const raw = inputEl.value;
+  let val;
+  if (field === 'closingDay' || field === 'dueDay') {
+    val = parseInt(raw) || 1;
+    if (val < 1) val = 1;
+    if (val > 31) val = 31;
+    card[field] = val;
+    inputEl.value = val;
+  } else {
+    val = parseAmountOrCalc(raw);
+    card[field] = val;
+    inputEl.value = val.toFixed(2);
+  }
+
+  inputEl.classList.add('cell-saved-flash');
+  setTimeout(() => inputEl.classList.remove('cell-saved-flash'), 1000);
+
+  saveLocalState();
+  renderApp();
+  showToast(`Cartão "${card.name}" atualizado!`, 'success');
+}
+
+function cardRolloverInvoice(cardId) {
+  const card = appState.cards.find(c => c.id === cardId);
+  if (!card) return;
+  const nextInv = Number(card.nextInvoice || 0);
+  if (nextInv === 0) {
+    showToast('Não há saldo na próxima fatura para transferir.', 'info');
+    return;
+  }
+  if (confirm(`Deseja virar o ciclo do cartão "${card.name}"?\nIsso transferirá ${formatCurrency(nextInv)} da Próxima Fatura para a Fatura Atual a pagar.`)) {
+    card.invoice = (Number(card.invoice) || 0) + nextInv;
+    card.nextInvoice = 0;
+    saveLocalState();
+    renderApp();
+    showToast(`Ciclo de ${card.name} virado com sucesso!`, 'success');
+  }
+}
+
+function exportCardsToCSV() {
+  const cards = getFilteredCards();
+  if (cards.length === 0) {
+    showToast('Nenhum cartão para exportar.', 'warning');
+    return;
+  }
+  let csv = 'Cartao;Banco;Finalidade;Fatura Atual;Proxima Fatura;Limite Total;Limite Disponivel;Dia Fechamento;Dia Vencimento\n';
+  cards.forEach(c => {
+    const inv = Number(c.invoice || 0);
+    const nextInv = Number(c.nextInvoice || 0);
+    const lim = Number(c.limit || 0);
+    const avail = Math.max(0, lim - (inv + nextInv));
+    csv += `"${c.name}";"${c.bank}";"${c.purpose}";"${inv.toFixed(2)}";"${nextInv.toFixed(2)}";"${lim.toFixed(2)}";"${avail.toFixed(2)}";"${c.closingDay || 20}";"${c.dueDay || 1}"\n`;
+  });
+  downloadCSVFile(csv, 'FinanceFlow_Cartoes_Credito.csv');
 }
 
 function renderCardTransactionsTable(txs) {
@@ -1763,13 +2254,30 @@ function openNewTransactionModal() {
   document.getElementById('formTransaction').reset();
   document.getElementById('txFormId').value = '';
   document.getElementById('txFormDate').value = new Date().toISOString().split('T')[0];
+  const overrideSelect = document.getElementById('txInvoiceCycleSelect');
+  if (overrideSelect) overrideSelect.value = 'auto';
   
   handleTxTypeRadioChange('expense');
   handleOriginTypeRadioChange('account');
   populatePurposeOptions('txFormPurpose');
   populateCategoryOptionsInTxModal('expense');
+  updateTxInvoiceHelper();
 
   openModal('modalTransaction');
+}
+
+function openNewCardExpenseModal(cardId) {
+  openNewTransactionModal();
+  handleTxTypeRadioChange('expense');
+  handleOriginTypeRadioChange('card');
+  if (cardId) {
+    const select = document.getElementById('txFormAccount');
+    if (select) {
+      select.value = cardId;
+      handleTxAccountChange(cardId);
+    }
+  }
+  updateTxInvoiceHelper();
 }
 
 function handleTxTypeRadioChange(type) {
@@ -1789,6 +2297,7 @@ function handleTxTypeRadioChange(type) {
   }
 
   populateCategoryOptionsInTxModal(type);
+  updateTxInvoiceHelper();
 }
 
 function handleOriginTypeRadioChange(originType) {
@@ -1801,7 +2310,7 @@ function handleOriginTypeRadioChange(originType) {
   if (originType === 'card') {
     label.textContent = 'Qual Cartão de Crédito? *';
     select.innerHTML = appState.cards.map(c => `
-      <option value="${c.id}">💳 ${c.name} (Fatura: ${formatCurrency(c.invoice)})</option>
+      <option value="${c.id}">💳 ${c.name} (Fatura Atual: ${formatCurrency(c.invoice)})</option>
     `).join('') || '<option value="">Nenhum cartão cadastrado</option>';
   } else {
     label.textContent = 'Qual Conta Bancária / Dinheiro? *';
@@ -1813,6 +2322,7 @@ function handleOriginTypeRadioChange(originType) {
   if (select.value) {
     handleTxAccountChange(select.value);
   }
+  updateTxInvoiceHelper();
 }
 
 function handleTxAccountChange(id) {
@@ -1824,6 +2334,96 @@ function handleTxAccountChange(id) {
     const acc = appState.accounts.find(a => a.id === id);
     if (acc && acc.purpose) document.getElementById('txFormPurpose').value = acc.purpose;
   }
+  updateTxInvoiceHelper();
+}
+
+// =========================================================================
+// ASSISTENTE DE CICLO DE FATURA DE CARTÃO (FATURA ATUAL vs PRÓXIMA FATURA)
+// =========================================================================
+
+function getCardInvoiceCycleInfo(card, txDateStr, overrideChoice = 'auto') {
+  if (!card) return { cycle: 'current', label: 'Fatura Atual', reason: '', isNext: false, closingDay: 20 };
+
+  const closingDay = parseInt(card.closingDay) || 20;
+  const dueDay = parseInt(card.dueDay) || 1;
+
+  if (overrideChoice === 'current') {
+    return {
+      cycle: 'current',
+      label: 'Fatura Atual (Manual)',
+      reason: `Você forçou esta compra manualmente para a <strong>Fatura Atual</strong>.`,
+      isNext: false,
+      closingDay,
+      dueDay
+    };
+  }
+  if (overrideChoice === 'next') {
+    return {
+      cycle: 'next',
+      label: 'Próxima Fatura (Manual)',
+      reason: `Você forçou esta compra manualmente para a <strong>Próxima Fatura</strong>.`,
+      isNext: true,
+      closingDay,
+      dueDay
+    };
+  }
+
+  // Cálculo automático baseado na data da compra e no dia de fechamento do cartão
+  const d = txDateStr ? new Date(txDateStr + 'T12:00:00') : new Date();
+  const day = d.getDate();
+  const isNext = day > closingDay;
+
+  return {
+    cycle: isNext ? 'next' : 'current',
+    label: isNext ? 'Próxima Fatura' : 'Fatura Atual',
+    isNext,
+    closingDay,
+    dueDay,
+    reason: isNext
+      ? `Fechamento no dia ${closingDay}. Como a data da compra é dia ${day} (após o fechamento), entra na <strong>PRÓXIMA FATURA</strong> (melhor dia de compra!).`
+      : `Fechamento no dia ${closingDay}. Como a data da compra é dia ${day} (até o fechamento), entra na <strong>FATURA ATUAL</strong> a pagar.`
+  };
+}
+
+function updateTxInvoiceHelper() {
+  const originType = document.querySelector('input[name="txOriginType"]:checked')?.value || 'account';
+  const type = document.querySelector('input[name="txType"]:checked')?.value || 'expense';
+  const helperBox = document.getElementById('txCardInvoiceHelper');
+  if (!helperBox) return;
+
+  if (originType !== 'card' || type !== 'expense') {
+    helperBox.classList.add('hidden');
+    return;
+  }
+
+  helperBox.classList.remove('hidden');
+
+  const cardId = document.getElementById('txFormAccount')?.value;
+  const card = appState.cards.find(c => c.id === cardId) || appState.cards[0];
+  const dateStr = document.getElementById('txFormDate')?.value;
+  const overrideChoice = document.getElementById('txInvoiceCycleSelect')?.value || 'auto';
+
+  const info = getCardInvoiceCycleInfo(card, dateStr, overrideChoice);
+
+  const badge = document.getElementById('txInvoiceBadge');
+  const desc = document.getElementById('txInvoiceDesc');
+
+  if (badge) {
+    badge.textContent = info.label;
+    if (info.isNext) {
+      badge.className = 'badge-invoice badge-invoice-next';
+    } else {
+      badge.className = 'badge-invoice badge-invoice-current';
+    }
+  }
+
+  if (desc) {
+    desc.innerHTML = info.reason;
+  }
+}
+
+function handleInvoiceCycleOverrideChange() {
+  updateTxInvoiceHelper();
 }
 
 function populateCategoryOptionsInTxModal(type, selectedCatId) {
@@ -1973,6 +2573,14 @@ function handleTransactionSubmit(e) {
     return;
   }
 
+  // Calculate credit card invoice cycle if origin is card
+  let invoiceCycle = 'current';
+  if (originType === 'card') {
+    const overrideChoice = document.getElementById('txInvoiceCycleSelect')?.value || 'auto';
+    const cardObj = appState.cards.find(c => c.id === accountId);
+    invoiceCycle = getCardInvoiceCycleInfo(cardObj, date, overrideChoice).cycle;
+  }
+
   if (id) {
     const tx = appState.transactions.find(t => t.id === id);
     if (tx) {
@@ -1984,6 +2592,7 @@ function handleTransactionSubmit(e) {
       tx.accountId = accountId;
       tx.originType = originType;
       tx.cardId = originType === 'card' ? accountId : null;
+      tx.invoiceCycle = originType === 'card' ? invoiceCycle : null;
       tx.destinationAccountId = destinationAccountId;
       tx.purpose = purpose;
       tx.category = category;
@@ -2002,6 +2611,7 @@ function handleTransactionSubmit(e) {
       accountId,
       originType,
       cardId: originType === 'card' ? accountId : null,
+      invoiceCycle: originType === 'card' ? invoiceCycle : null,
       destinationAccountId,
       purpose,
       category,
@@ -2026,7 +2636,11 @@ function adjustBalanceForTx(tx, isRevert = false) {
   if (tx.originType === 'card' || tx.cardId) {
     const card = appState.cards.find(c => c.id === (tx.cardId || tx.accountId));
     if (card) {
-      card.invoice = (Number(card.invoice) || 0) + (tx.amount * multiplier);
+      if (tx.invoiceCycle === 'next') {
+        card.nextInvoice = Math.max(0, (Number(card.nextInvoice) || 0) + (tx.amount * multiplier));
+      } else {
+        card.invoice = Math.max(0, (Number(card.invoice) || 0) + (tx.amount * multiplier));
+      }
     }
   } else {
     const acc = appState.accounts.find(a => a.id === tx.accountId);
@@ -2077,6 +2691,12 @@ function editTransaction(txId) {
 
   const accSelect = document.getElementById('txFormAccount');
   if (accSelect) accSelect.value = tx.cardId || tx.accountId;
+
+  const overrideSelect = document.getElementById('txInvoiceCycleSelect');
+  if (overrideSelect) {
+    overrideSelect.value = tx.invoiceCycle || 'auto';
+  }
+  updateTxInvoiceHelper();
 
   populatePurposeOptions('txFormPurpose', tx.purpose);
   populateCategoryOptionsInTxModal(tx.type, tx.category);

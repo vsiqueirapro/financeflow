@@ -18,7 +18,7 @@
   <!-- Chart.js via CDN -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   
-  <link rel="stylesheet" href="styles.css?v=2.2">
+  <link rel="stylesheet" href="styles.css?v=2.3">
 </head>
 <body class="dark-theme">
   <!-- APP WRAPPER -->
@@ -405,24 +405,77 @@
             </div>
           </div>
 
-          <!-- Filtros de Contas -->
-          <div class="filter-pills-row" id="accountPurposeFilterRow">
-            <button class="pill-filter-btn active" data-purpose="ALL" onclick="filterAccountsByPurpose('ALL')">Todas as Contas</button>
-            <button class="pill-filter-btn" data-purpose="casa" onclick="filterAccountsByPurpose('casa')">🏡 CASA</button>
-            <button class="pill-filter-btn" data-purpose="pessoal" onclick="filterAccountsByPurpose('pessoal')">👤 PESSOAL</button>
+          <!-- Barra de Controles: Filtros de Finalidade & Alternador de Modo (Cards vs Planilha) -->
+          <div class="accounts-controls-bar">
+            <div class="filter-pills-row" id="accountPurposeFilterRow">
+              <button class="pill-filter-btn active" data-purpose="ALL" onclick="filterAccountsByPurpose('ALL')">Todas as Contas</button>
+              <button class="pill-filter-btn" data-purpose="casa" onclick="filterAccountsByPurpose('casa')">🏡 CASA</button>
+              <button class="pill-filter-btn" data-purpose="pessoal" onclick="filterAccountsByPurpose('pessoal')">👤 PESSOAL</button>
+            </div>
+
+            <!-- Alternador de Modo: Cards vs Planilha -->
+            <div class="view-mode-toggle">
+              <button class="btn-mode-toggle active" id="btnModeAccountsCards" onclick="setAccountsViewMode('cards')" title="Exibir em formato de Cards">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+                <span>Modo Cards</span>
+              </button>
+              <button class="btn-mode-toggle" id="btnModeAccountsSpreadsheet" onclick="setAccountsViewMode('spreadsheet')" title="Exibir e editar em formato de Planilha (Excel)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18"/></svg>
+                <span>Modo Planilha</span>
+              </button>
+            </div>
           </div>
 
-          <!-- Grid de Cartões de Bancos -->
+          <!-- MODO 1: Grid de Cartões de Bancos -->
           <div class="accounts-cards-grid" id="accountsCardsGrid">
             <!-- Cards gerados dinamicamente -->
           </div>
 
-          <!-- Histórico de Ajuste de Saldos e Evolução -->
-          <div class="dash-block mt-4">
+          <!-- MODO 2: Planilha Interativa Editável (Excel Style) -->
+          <div id="accountsSpreadsheetContainer" class="spreadsheet-container hidden">
+            <div class="spreadsheet-toolbar">
+              <div class="spreadsheet-tip">
+                <span>💡 <strong>Modo Planilha Ativo:</strong> Clique e digite diretamente nas células de saldo (aceita fórmulas como <code>1500+250</code>). Ao sair do campo ou pressionar Enter, o saldo é salvo e registrado no histórico automaticamente.</span>
+              </div>
+              <button class="btn-secondary btn-sm" onclick="exportAccountsToCSV()">📥 Baixar CSV</button>
+            </div>
+            <div class="table-responsive spreadsheet-wrapper">
+              <table class="spreadsheet-table" id="accountsSpreadsheetTable">
+                <thead>
+                  <tr>
+                    <th>Banco</th>
+                    <th>Nome da Conta</th>
+                    <th>Tipo</th>
+                    <th>Finalidade</th>
+                    <th class="cell-align-right" style="min-width: 170px;">Saldo Atual (R$) [Editável]</th>
+                    <th class="cell-align-right">Saldo Inicial</th>
+                    <th>Último Ajuste</th>
+                    <th class="cell-align-center">Ações</th>
+                  </tr>
+                </thead>
+                <tbody id="accountsSpreadsheetBody">
+                  <!-- Gerado dinamicamente -->
+                </tbody>
+                <tfoot id="accountsSpreadsheetFoot">
+                  <!-- Totais gerados dinamicamente -->
+                </tfoot>
+              </table>
+            </div>
+          </div>
+
+          <!-- Histórico & Demonstrativo de Evolução dos Saldos -->
+          <div class="dash-block mt-4" id="accountEvolutionStatementBlock">
             <div class="block-header">
               <div>
-                <h3 class="block-title">Histórico Real de Ajustes de Saldo & Conciliações</h3>
-                <p class="block-subtitle">Registro cronológico das alterações e evolução dos saldos das suas contas</p>
+                <h3 class="block-title">Demonstrativo de Evolução dos Saldos & Histórico</h3>
+                <p class="block-subtitle">Registro cronológico detalhado das alterações, evolução e conciliações de cada conta</p>
+              </div>
+              <div class="table-account-filter">
+                <label for="snapshotAccountFilter" style="font-size:0.8rem; color:var(--text-muted); margin-right:8px;">Filtrar Conta:</label>
+                <select id="snapshotAccountFilter" class="select-styled" style="padding: 4px 10px; font-size: 0.85rem;" onchange="handleSnapshotAccountFilterChange(this.value)">
+                  <option value="ALL">Todas as Contas</option>
+                  <!-- Preenchido dinamicamente -->
+                </select>
               </div>
             </div>
             <div class="table-responsive">
@@ -489,16 +542,63 @@
             </div>
           </div>
 
-          <!-- Filtro de Finalidade para Cartões -->
-          <div class="filter-pills-row" id="cardsPurposeFilterRow">
-            <button class="pill-filter-btn active" onclick="filterCardsByPurpose('ALL')">Todos os Cartões</button>
-            <button class="pill-filter-btn" onclick="filterCardsByPurpose('casa')">🏡 Cartões CASA</button>
-            <button class="pill-filter-btn" onclick="filterCardsByPurpose('pessoal')">👤 Cartões PESSOAL</button>
+          <!-- Barra de Controles: Filtro de Finalidade & Alternador de Modo (Cards vs Planilha) -->
+          <div class="accounts-controls-bar">
+            <div class="filter-pills-row" id="cardsPurposeFilterRow">
+              <button class="pill-filter-btn active" onclick="filterCardsByPurpose('ALL')">Todos os Cartões</button>
+              <button class="pill-filter-btn" onclick="filterCardsByPurpose('casa')">🏡 Cartões CASA</button>
+              <button class="pill-filter-btn" onclick="filterCardsByPurpose('pessoal')">👤 Cartões PESSOAL</button>
+            </div>
+
+            <!-- Alternador de Modo: Cards vs Planilha -->
+            <div class="view-mode-toggle">
+              <button class="btn-mode-toggle active" id="btnModeCardsCards" onclick="setCardsViewMode('cards')" title="Exibir em formato de Cards">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+                <span>Modo Cards</span>
+              </button>
+              <button class="btn-mode-toggle" id="btnModeCardsSpreadsheet" onclick="setCardsViewMode('spreadsheet')" title="Exibir e editar em formato de Planilha (Excel)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18"/></svg>
+                <span>Modo Planilha</span>
+              </button>
+            </div>
           </div>
 
-          <!-- Grid de Cartões -->
+          <!-- MODO 1: Grid de Cartões -->
           <div class="accounts-cards-grid" id="creditCardsGrid">
             <!-- Injetado dinamicamente -->
+          </div>
+
+          <!-- MODO 2: Planilha de Cartões Editável (Excel Style) -->
+          <div id="cardsSpreadsheetContainer" class="spreadsheet-container hidden">
+            <div class="spreadsheet-toolbar">
+              <div class="spreadsheet-tip">
+                <span>💡 <strong>Modo Planilha Ativo:</strong> Edite faturas atuais, limites e dias de fechamento diretamente na tabela estilo Excel. Ao sair da célula, o valor é salvo e recalculado instantaneamente.</span>
+              </div>
+              <button class="btn-secondary btn-sm" onclick="exportCardsToCSV()">📥 Baixar CSV</button>
+            </div>
+            <div class="table-responsive spreadsheet-wrapper">
+              <table class="spreadsheet-table" id="cardsSpreadsheetTable">
+                <thead>
+                  <tr>
+                    <th>Cartão / Banco</th>
+                    <th>Finalidade</th>
+                    <th class="cell-align-right" style="min-width: 150px;">Fatura Atual (R$) [Editável]</th>
+                    <th class="cell-align-right">Próxima Fatura</th>
+                    <th class="cell-align-right" style="min-width: 150px;">Limite Total (R$) [Editável]</th>
+                    <th class="cell-align-right">Limite Disponível</th>
+                    <th class="cell-align-center" style="min-width: 90px;">Fecha Dia</th>
+                    <th class="cell-align-center" style="min-width: 90px;">Vence Dia</th>
+                    <th class="cell-align-center">Ações</th>
+                  </tr>
+                </thead>
+                <tbody id="cardsSpreadsheetBody">
+                  <!-- Gerado dinamicamente -->
+                </tbody>
+                <tfoot id="cardsSpreadsheetFoot">
+                  <!-- Totais gerados dinamicamente -->
+                </tfoot>
+              </table>
+            </div>
           </div>
 
           <!-- Extrato de Compras no Cartão -->
@@ -1012,9 +1112,23 @@
             </div>
 
             <div class="form-group full-col" id="balanceFieldContainer">
-              <label for="accFormBalance">Saldo Inicial da Conta (R$) *</label>
-              <input type="number" step="0.01" id="accFormBalance" required value="0.00" placeholder="0,00">
-              <small class="field-hint">Você poderá ajustar e registrar a evolução do saldo a qualquer momento.</small>
+              <div class="label-calc-row">
+                <label for="accFormBalance" id="accFormBalanceLabel">Saldo Inicial da Conta (R$) *</label>
+                <span class="calc-badge-indicator" title="Você pode fazer contas diretamente">🧮 Aceita contas (ex: 1500+250)</span>
+              </div>
+              <div class="calc-input-container">
+                <input type="text" id="accFormBalance" required value="0.00" placeholder="0.00 ou ex: 1500 + 350" class="calc-eval-input" autocomplete="off" oninput="handleCalcLiveInput(this)" onblur="handleCalcBlur(this)" onkeydown="handleCalcKeydown(event, this)">
+                <span class="calc-live-result" id="accFormBalance_calcResult"></span>
+              </div>
+              <div class="calc-quick-keys">
+                <button type="button" class="btn-calc-key" onclick="appendCalcOperator('accFormBalance', '+')">+</button>
+                <button type="button" class="btn-calc-key" onclick="appendCalcOperator('accFormBalance', '-')">-</button>
+                <button type="button" class="btn-calc-key" onclick="appendCalcOperator('accFormBalance', '*')">&times;</button>
+                <button type="button" class="btn-calc-key" onclick="appendCalcOperator('accFormBalance', '/')">&divide;</button>
+                <button type="button" class="btn-calc-key" onclick="appendCalcOperator('accFormBalance', '%')">%</button>
+                <button type="button" class="btn-calc-key btn-calc-equal" onclick="resolveCalcExpression('accFormBalance')">=</button>
+              </div>
+              <small class="field-hint">Defina o saldo inicial. Você poderá ajustar e acompanhar a evolução a qualquer momento.</small>
             </div>
           </div>
         </div>
@@ -1331,7 +1445,7 @@
 
             <div class="form-group">
               <label for="txFormDate">Data *</label>
-              <input type="date" id="txFormDate" required>
+              <input type="date" id="txFormDate" required onchange="updateTxInvoiceHelper()">
             </div>
 
             <!-- Origem: Conta Corrente ou Cartão de Crédito -->
@@ -1340,6 +1454,30 @@
               <select id="txFormAccount" required onchange="handleTxAccountChange(this.value)">
                 <!-- Preenchido via JS -->
               </select>
+            </div>
+
+            <!-- Assistente Dinâmico de Fatura (Fatura Atual vs Próxima Fatura) -->
+            <div class="form-group full-col hidden" id="txCardInvoiceHelper">
+              <div class="card-invoice-helper-box">
+                <div class="invoice-helper-header">
+                  <div class="invoice-helper-title-wrap">
+                    <span class="invoice-helper-icon">🗓️</span>
+                    <span class="invoice-helper-title">Destino no Cartão:</span>
+                  </div>
+                  <span class="badge-invoice badge-invoice-current" id="txInvoiceBadge">Fatura Atual</span>
+                </div>
+                <div class="invoice-helper-desc" id="txInvoiceDesc">
+                  Fechamento do cartão no dia 20. Esta compra entra na <strong>Fatura Atual</strong>.
+                </div>
+                <div class="invoice-helper-override-row">
+                  <label for="txInvoiceCycleSelect">Direcionar para:</label>
+                  <select id="txInvoiceCycleSelect" class="invoice-cycle-select" onchange="handleInvoiceCycleOverrideChange()">
+                    <option value="auto">⚡ Automático (baseado no dia de fechamento)</option>
+                    <option value="current">📌 Forçar Fatura Atual (a pagar este mês)</option>
+                    <option value="next">⏭️ Forçar Próxima Fatura (melhor dia de compra)</option>
+                  </select>
+                </div>
+              </div>
             </div>
 
             <!-- Destino no caso de transferência -->
@@ -1516,6 +1654,6 @@
   <div id="toastContainer" class="toast-container"></div>
 
   <!-- JAVASCRIPT PRINCIPAL -->
-  <script src="app.js?v=2.2"></script>
+  <script src="app.js?v=2.3"></script>
 </body>
 </html>
