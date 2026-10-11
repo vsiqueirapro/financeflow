@@ -3968,7 +3968,7 @@ async function forceAppUpdate() {
 
 function initPWA() {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js?v=2.4')
+    navigator.serviceWorker.register('./sw.js?v=2.5')
       .then(reg => {
         console.log('ServiceWorker registered:', reg.scope);
         // Force check for updates every time
