@@ -377,7 +377,10 @@
               <h2 class="view-title">Contas Bancárias</h2>
               <p class="view-subtitle">Cadastre e acompanhe o saldo de cada conta nos diversos bancos (Corrente, Poupança, Investimentos ou Dinheiro).</p>
             </div>
-            <div class="view-actions-group">
+              <button class="btn-secondary" onclick="openNewTransferModal()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                <span>⇄ Transferir entre Contas</span>
+              </button>
               <button class="btn-secondary" onclick="openPurposeManagerModal()">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
                 <span>Definições (Casa/Pessoal)</span>
@@ -606,7 +609,18 @@
             <div class="block-header">
               <div>
                 <h3 class="block-title">Extrato de Despesas em Cartão de Crédito</h3>
-                <p class="block-subtitle">Histórico de compras e gastos lançados em cada cartão</p>
+                <p class="block-subtitle">Histórico dinâmico de compras com identificação da fatura atual e seguinte</p>
+              </div>
+              <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                <select id="cardTxCardFilter" class="invoice-cycle-select" style="min-width: 160px;" onchange="filterAndRenderCardTransactions()">
+                  <option value="ALL">💳 Todos os Cartões</option>
+                </select>
+                <select id="cardTxCycleFilter" class="invoice-cycle-select" style="min-width: 170px;" onchange="filterAndRenderCardTransactions()">
+                  <option value="ALL">📅 Todas as Faturas</option>
+                  <option value="current">⚡ Fatura Atual</option>
+                  <option value="next">⏭️ Próxima Fatura</option>
+                  <option value="previous">📁 Faturas Anteriores</option>
+                </select>
               </div>
             </div>
             <div class="table-responsive">
@@ -616,6 +630,7 @@
                     <th>Data</th>
                     <th>Cartão</th>
                     <th>Descrição</th>
+                    <th>Fatura / Ciclo</th>
                     <th>Categoria</th>
                     <th>Finalidade</th>
                     <th>Valor</th>

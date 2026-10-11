@@ -529,6 +529,7 @@ function togglePrivacyMode() {
 
 function renderApp() {
   appState = sanitizeAndMigrateState(appState);
+  recalculateCardInvoices();
   renderPurposeSelectors();
   renderDashboard();
   renderAccountsView();
@@ -786,12 +787,20 @@ function renderDashboardRecentTransactions(transactions) {
 }
 
 function getTxOriginLabel(tx) {
-  if (tx.originType === 'card' || tx.cardId) {
+  if (tx.type === 'transfer') {
+    const srcAcc = appState.accounts.find(a => a.id === tx.accountId);
+    const destAcc = appState.accounts.find(a => a.id === tx.destinationAccountId);
+    const srcName = srcAcc ? srcAcc.name : 'Origem';
+    const destName = destAcc ? destAcc.name : 'Destino';
+    return `<div class="transfer-origin-badge"><span>🏦 ${srcName}</span> <span class="transfer-arrow">➔</span> <span>🏦 ${destName}</span></div>`;
+  } else if (tx.originType === 'card' || tx.cardId) {
     const card = appState.cards.find(c => c.id === (tx.cardId || tx.accountId));
     const cardName = card ? `💳 ${card.name}` : '💳 Cartão de Crédito';
-    const cycle = tx.invoiceCycle || (card ? getCardInvoiceCycleInfo(card, tx.date).cycle : 'current');
-    const isNext = cycle === 'next';
-    const cycleBadge = `<span class="badge-cycle ${isNext ? 'cycle-next' : 'cycle-current'}" style="margin-left:4px;">${isNext ? 'Próx. Fatura' : 'Fatura Atual'}</span>`;
+    const cycleInfo = card ? getCardInvoiceCycleInfo(card, tx.date, tx.invoiceCycle) : { cycle: 'current', label: 'Fatura Atual' };
+    let badgeClass = 'cycle-current';
+    if (cycleInfo.cycle === 'next') badgeClass = 'cycle-next';
+    else if (cycleInfo.cycle === 'previous') badgeClass = 'cycle-previous';
+    const cycleBadge = `<span class="badge-cycle ${badgeClass}" style="margin-left:4px;">${cycleInfo.label}</span>`;
     return `<div style="display:flex; flex-direction:column; gap:2px;"><span>${cardName}</span><div>${cycleBadge}</div></div>`;
   } else {
     const acc = appState.accounts.find(a => a.id === tx.accountId);
@@ -891,6 +900,9 @@ function renderAccountsView() {
 
           <div class="card-actions-row">
             <div style="display:flex; gap:6px; flex-wrap:wrap;">
+              <button class="btn-action-pill" onclick="openNewTransferModal('${acc.id}')" title="Transferir a partir desta conta">
+                ⇄ Transferir
+              </button>
               <button class="btn-action-pill" onclick="openAdjustBalanceModal('${acc.id}')" title="Ajustar saldo e registrar evolução">
                 ⚖️ Ajustar Saldo
               </button>
@@ -1376,9 +1388,50 @@ function filterCardsByPurpose(purposeId) {
   renderApp();
 }
 
+function recalculateCardInvoices() {
+  if (!appState || !Array.isArray(appState.cards)) return;
+
+  appState.cards.forEach(card => {
+    const cardTxs = appState.transactions.filter(t => 
+      (t.originType === 'card' || t.cardId === card.id || t.accountId === card.id) &&
+      t.status === 'completed' &&
+      t.type === 'expense'
+    );
+
+    let currentSum = 0;
+    let nextSum = 0;
+    let currentCount = 0;
+    let nextCount = 0;
+
+    cardTxs.forEach(tx => {
+      const cycleInfo = getCardInvoiceCycleInfo(card, tx.date, tx.invoiceCycle);
+      const amt = Number(tx.amount || 0);
+      if (cycleInfo.cycle === 'next') {
+        nextSum += amt;
+        nextCount++;
+      } else if (cycleInfo.cycle === 'current') {
+        currentSum += amt;
+        currentCount++;
+      }
+    });
+
+    card._currentCount = currentCount;
+    card._nextCount = nextCount;
+
+    // Se houver transações registradas para este cartão, atualiza dinamicamente os valores
+    if (cardTxs.length > 0) {
+      card.invoice = Math.round(currentSum * 100) / 100;
+      card.nextInvoice = Math.round(nextSum * 100) / 100;
+    }
+  });
+}
+
 function renderCardsView() {
   const container = document.getElementById('creditCardsGrid');
   if (!container) return;
+
+  // Recalcula faturas dinamicamente antes de renderizar
+  recalculateCardInvoices();
 
   const cards = getFilteredCards();
 
@@ -1436,12 +1489,16 @@ function renderCardsView() {
             </div>
             <div class="card-balance-val color-expense">
               -${formatCurrency(inv)}
+              <span class="card-invoice-counts-badge">(${card._currentCount || 0} compras)</span>
             </div>
           </div>
 
           <div class="card-next-invoice-row">
-            <span>Próxima Fatura:</span>
-            <strong class="color-warning">-${formatCurrency(nextInv)}</strong>
+            <span>Próxima Fatura (após dia ${card.closingDay || 20}):</span>
+            <div>
+              <strong class="color-warning">-${formatCurrency(nextInv)}</strong>
+              <span class="card-invoice-counts-badge">(${card._nextCount || 0} compras)</span>
+            </div>
           </div>
 
           <div class="card-credit-details" style="margin-top: 8px;">
@@ -1486,9 +1543,8 @@ function renderCardsView() {
   // Apply persisted view mode
   setCardsViewMode(cardsViewMode);
 
-  // Render credit card expenses
-  const cardTxs = appState.transactions.filter(t => t.originType === 'card' || appState.cards.some(c => c.id === t.accountId));
-  renderCardTransactionsTable(cardTxs);
+  // Render credit card expenses with dynamic filters
+  filterAndRenderCardTransactions();
 }
 
 function renderCardsSpreadsheet() {
@@ -1642,6 +1698,16 @@ function cardRolloverInvoice(cardId) {
     return;
   }
   if (confirm(`Deseja virar o ciclo do cartão "${card.name}"?\nIsso transferirá ${formatCurrency(nextInv)} da Próxima Fatura para a Fatura Atual a pagar.`)) {
+    // Marca compras da próxima fatura para a fatura atual
+    appState.transactions.forEach(t => {
+      if (t.originType === 'card' || t.cardId === card.id || t.accountId === card.id) {
+        const info = getCardInvoiceCycleInfo(card, t.date, t.invoiceCycle);
+        if (info.cycle === 'next') {
+          t.invoiceCycle = 'current';
+        }
+      }
+    });
+
     card.invoice = (Number(card.invoice) || 0) + nextInv;
     card.nextInvoice = 0;
     saveLocalState();
@@ -1667,19 +1733,59 @@ function exportCardsToCSV() {
   downloadCSVFile(csv, 'FinanceFlow_Cartoes_Credito.csv');
 }
 
+function filterAndRenderCardTransactions() {
+  const cardSelect = document.getElementById('cardTxCardFilter');
+  const cycleSelect = document.getElementById('cardTxCycleFilter');
+
+  if (cardSelect) {
+    const currentVal = cardSelect.value || 'ALL';
+    cardSelect.innerHTML = '<option value="ALL">💳 Todos os Cartões</option>' + appState.cards.map(c => `
+      <option value="${c.id}" ${currentVal === c.id ? 'selected' : ''}>💳 ${c.name}</option>
+    `).join('');
+    if (appState.cards.some(c => c.id === currentVal)) {
+      cardSelect.value = currentVal;
+    }
+  }
+
+  const selectedCardId = cardSelect?.value || 'ALL';
+  const selectedCycle = cycleSelect?.value || 'ALL';
+
+  let cardTxs = appState.transactions.filter(t => (t.originType === 'card' || appState.cards.some(c => c.id === t.accountId)));
+
+  if (selectedCardId !== 'ALL') {
+    cardTxs = cardTxs.filter(t => (t.cardId === selectedCardId || t.accountId === selectedCardId));
+  }
+
+  if (selectedCycle !== 'ALL') {
+    cardTxs = cardTxs.filter(t => {
+      const card = appState.cards.find(c => c.id === (t.cardId || t.accountId));
+      if (!card) return false;
+      const info = getCardInvoiceCycleInfo(card, t.date, t.invoiceCycle);
+      return info.cycle === selectedCycle;
+    });
+  }
+
+  renderCardTransactionsTable(cardTxs);
+}
+
 function renderCardTransactionsTable(txs) {
   const tbody = document.getElementById('cardTransactionsTableBody');
   if (!tbody) return;
 
   if (txs.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-dim); padding: 20px;">Nenhuma despesa de cartão de crédito registrada ainda. Use o botão "+ Despesa no Cartão" para lançar.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--text-dim); padding: 20px;">Nenhuma despesa de cartão de crédito encontrada com os filtros atuais. Use o botão "+ Despesa no Cartão" para lançar.</td></tr>`;
     return;
   }
 
   const sorted = [...txs].sort((a, b) => new Date(b.date) - new Date(a.date));
 
   tbody.innerHTML = sorted.map(tx => {
-    const card = appState.cards.find(c => c.id === (tx.cardId || tx.accountId)) || { name: 'Cartão' };
+    const card = appState.cards.find(c => c.id === (tx.cardId || tx.accountId)) || { name: 'Cartão', closingDay: 20, dueDay: 1 };
+    const cycleInfo = getCardInvoiceCycleInfo(card, tx.date, tx.invoiceCycle);
+    let badgeClass = 'cycle-current';
+    if (cycleInfo.cycle === 'next') badgeClass = 'cycle-next';
+    else if (cycleInfo.cycle === 'previous') badgeClass = 'cycle-previous';
+
     const purposeObj = appState.purposes.find(p => p.id === tx.purpose) || { name: tx.purpose || 'PESSOAL', color: '#10b981' };
     const cat = appState.categories.find(c => c.id === tx.category) || { name: tx.category || 'Geral', icon: '🏷️' };
     const isCompleted = tx.status === 'completed';
@@ -1689,6 +1795,11 @@ function renderCardTransactionsTable(txs) {
         <td>${formatDateBR(tx.date)}</td>
         <td><strong>💳 ${card.name}</strong></td>
         <td>${tx.description}</td>
+        <td>
+          <span class="badge-cycle ${badgeClass}" title="${cycleInfo.periodLabel} - Fecha em ${cycleInfo.closingDateStr}, vence em ${cycleInfo.dueDateStr}">
+            ${cycleInfo.label}
+          </span>
+        </td>
         <td>${cat.icon} ${cat.name}</td>
         <td>
           <span class="card-purpose-badge" style="color:${purposeObj.color}; border-color:${purposeObj.color}40; background:${purposeObj.color}15">
@@ -2169,7 +2280,11 @@ function applyTransactionFilters() {
     if (originFilter !== 'ALL') {
       if (originFilter.startsWith('acc_')) {
         const accId = originFilter.replace('acc_', '');
-        if (tx.accountId !== accId || tx.originType === 'card') return false;
+        if (tx.type === 'transfer') {
+          if (tx.accountId !== accId && tx.destinationAccountId !== accId) return false;
+        } else {
+          if (tx.accountId !== accId || tx.originType === 'card') return false;
+        }
       } else if (originFilter.startsWith('card_')) {
         const cardId = originFilter.replace('card_', '');
         if (tx.cardId !== cardId && tx.accountId !== cardId) return false;
@@ -2210,6 +2325,7 @@ function applyTransactionFilters() {
     const purposeObj = appState.purposes.find(p => p.id === tx.purpose) || { name: tx.purpose || 'PESSOAL', color: '#10b981' };
     const cat = appState.categories.find(c => c.id === tx.category) || { name: tx.category || 'Geral', icon: '🏷️' };
     const isIncome = tx.type === 'income';
+    const isTransfer = tx.type === 'transfer';
     const isCompleted = tx.status === 'completed';
 
     return `
@@ -2228,8 +2344,8 @@ function applyTransactionFilters() {
           </span>
         </td>
         <td>${cat.icon} ${cat.name}</td>
-        <td class="${isIncome ? 'val-positive' : 'val-negative'}">
-          ${isIncome ? '+' : '-'}${formatCurrency(tx.amount)}
+        <td class="${isTransfer ? 'val-transfer' : (isIncome ? 'val-positive' : 'val-negative')}">
+          ${isTransfer ? `<span class="transfer-amount">⇄ ${formatCurrency(tx.amount)}</span>` : `${isIncome ? '+' : '-'}${formatCurrency(tx.amount)}`}
         </td>
         <td>
           <span class="status-badge ${isCompleted ? 'status-paid' : 'status-pending'}" onclick="toggleTxStatus('${tx.id}')">
@@ -2266,6 +2382,21 @@ function openNewTransactionModal() {
   openModal('modalTransaction');
 }
 
+function openNewTransferModal(sourceAccountId) {
+  openNewTransactionModal();
+  document.getElementById('modalTransactionTitle').textContent = 'Transferência entre Contas';
+  handleTxTypeRadioChange('transfer');
+  
+  if (sourceAccountId) {
+    const srcSelect = document.getElementById('txFormAccount');
+    if (srcSelect) {
+      srcSelect.value = sourceAccountId;
+      handleTxAccountChange(sourceAccountId);
+    }
+  }
+  document.getElementById('txFormDesc').value = 'Transferência entre contas';
+}
+
 function openNewCardExpenseModal(cardId) {
   openNewTransactionModal();
   handleTxTypeRadioChange('expense');
@@ -2278,6 +2409,30 @@ function openNewCardExpenseModal(cardId) {
     }
   }
   updateTxInvoiceHelper();
+}
+
+function populateTransferDestinationOptions(selectedSourceId, selectedDestId) {
+  const destSelect = document.getElementById('txFormDestination');
+  if (!destSelect) return;
+
+  const currentSource = selectedSourceId || document.getElementById('txFormAccount')?.value;
+  const availableAccounts = appState.accounts.filter(a => a.id !== currentSource);
+
+  if (availableAccounts.length === 0) {
+    destSelect.innerHTML = '<option value="">Nenhuma outra conta bancária cadastrada</option>';
+    return;
+  }
+
+  const targetValue = selectedDestId || destSelect.value;
+  destSelect.innerHTML = availableAccounts.map(a => `
+    <option value="${a.id}" ${targetValue === a.id ? 'selected' : ''}>
+      🏦 ${a.name} (Saldo: ${formatCurrency(a.balance)})
+    </option>
+  `).join('');
+
+  if (!destSelect.value && availableAccounts.length > 0) {
+    destSelect.value = availableAccounts[0].id;
+  }
 }
 
 function handleTxTypeRadioChange(type) {
@@ -2296,6 +2451,21 @@ function handleTxTypeRadioChange(type) {
     handleOriginTypeRadioChange('account');
   }
 
+  const label = document.getElementById('txAccountLabel');
+  if (label) {
+    if (isTransfer) {
+      label.textContent = 'Conta de Origem (de onde sai o dinheiro) *';
+    } else {
+      const originType = document.querySelector('input[name="txOriginType"]:checked')?.value || 'account';
+      label.textContent = originType === 'card' ? 'Qual Cartão de Crédito? *' : 'Qual Conta Bancária / Dinheiro? *';
+    }
+  }
+
+  if (isTransfer) {
+    const currentSrc = document.getElementById('txFormAccount')?.value;
+    populateTransferDestinationOptions(currentSrc);
+  }
+
   populateCategoryOptionsInTxModal(type);
   updateTxInvoiceHelper();
 }
@@ -2306,14 +2476,15 @@ function handleOriginTypeRadioChange(originType) {
 
   const select = document.getElementById('txFormAccount');
   const label = document.getElementById('txAccountLabel');
+  const isTransfer = document.querySelector('input[name="txType"]:checked')?.value === 'transfer';
 
-  if (originType === 'card') {
+  if (originType === 'card' && !isTransfer) {
     label.textContent = 'Qual Cartão de Crédito? *';
     select.innerHTML = appState.cards.map(c => `
       <option value="${c.id}">💳 ${c.name} (Fatura Atual: ${formatCurrency(c.invoice)})</option>
     `).join('') || '<option value="">Nenhum cartão cadastrado</option>';
   } else {
-    label.textContent = 'Qual Conta Bancária / Dinheiro? *';
+    label.textContent = isTransfer ? 'Conta de Origem (de onde sai o dinheiro) *' : 'Qual Conta Bancária / Dinheiro? *';
     select.innerHTML = appState.accounts.map(a => `
       <option value="${a.id}">🏦 ${a.name} (Saldo: ${formatCurrency(a.balance)})</option>
     `).join('') || '<option value="">Nenhuma conta cadastrada</option>';
@@ -2326,8 +2497,14 @@ function handleOriginTypeRadioChange(originType) {
 }
 
 function handleTxAccountChange(id) {
+  const currentType = document.querySelector('input[name="txType"]:checked')?.value || 'expense';
   const originType = document.querySelector('input[name="txOriginType"]:checked')?.value || 'account';
-  if (originType === 'card') {
+
+  if (currentType === 'transfer') {
+    populateTransferDestinationOptions(id);
+  }
+
+  if (originType === 'card' && currentType !== 'transfer') {
     const card = appState.cards.find(c => c.id === id);
     if (card && card.purpose) document.getElementById('txFormPurpose').value = card.purpose;
   } else {
@@ -2342,46 +2519,148 @@ function handleTxAccountChange(id) {
 // =========================================================================
 
 function getCardInvoiceCycleInfo(card, txDateStr, overrideChoice = 'auto') {
-  if (!card) return { cycle: 'current', label: 'Fatura Atual', reason: '', isNext: false, closingDay: 20 };
+  if (!card) {
+    return {
+      cycle: 'current',
+      invoicePeriod: '',
+      label: 'Fatura Atual',
+      shortLabel: 'Fatura Atual',
+      periodLabel: 'Fatura Atual',
+      closingDateStr: '',
+      dueDateStr: '',
+      reason: '',
+      isNext: false,
+      closingDay: 20,
+      dueDay: 1
+    };
+  }
 
   const closingDay = parseInt(card.closingDay) || 20;
   const dueDay = parseInt(card.dueDay) || 1;
 
-  if (overrideChoice === 'current') {
-    return {
-      cycle: 'current',
-      label: 'Fatura Atual (Manual)',
-      reason: `Você forçou esta compra manualmente para a <strong>Fatura Atual</strong>.`,
-      isNext: false,
-      closingDay,
-      dueDay
-    };
+  // Data da transação com suporte seguro a formato ISO ou YYYY-MM-DD
+  let txDate;
+  if (txDateStr instanceof Date) {
+    txDate = txDateStr;
+  } else if (typeof txDateStr === 'string' && txDateStr.trim()) {
+    if (txDateStr.includes('T')) {
+      txDate = new Date(txDateStr);
+    } else {
+      txDate = new Date(txDateStr + 'T12:00:00');
+    }
+  } else {
+    txDate = new Date();
   }
-  if (overrideChoice === 'next') {
-    return {
-      cycle: 'next',
-      label: 'Próxima Fatura (Manual)',
-      reason: `Você forçou esta compra manualmente para a <strong>Próxima Fatura</strong>.`,
-      isNext: true,
-      closingDay,
-      dueDay
-    };
+  if (isNaN(txDate.getTime())) {
+    txDate = new Date();
   }
 
-  // Cálculo automático baseado na data da compra e no dia de fechamento do cartão
-  const d = txDateStr ? new Date(txDateStr + 'T12:00:00') : new Date();
-  const day = d.getDate();
-  const isNext = day > closingDay;
+  const txYear = txDate.getFullYear();
+  const txMonth = txDate.getMonth(); // 0 a 11
+  const txDay = txDate.getDate();
+
+  // Mês e Ano de fechamento da fatura em que esta transação se encaixa:
+  // Se o dia da compra é <= closingDay: fecha no mês da compra
+  // Se o dia da compra é > closingDay: fecha no mês seguinte
+  let invoiceCloseYear = txYear;
+  let invoiceCloseMonth = txMonth;
+  if (txDay > closingDay) {
+    invoiceCloseMonth += 1;
+    if (invoiceCloseMonth > 11) {
+      invoiceCloseMonth = 0;
+      invoiceCloseYear += 1;
+    }
+  }
+
+  const invoicePeriodKey = `${invoiceCloseYear}-${String(invoiceCloseMonth + 1).padStart(2, '0')}`;
+
+  // Calcula a data exata de fechamento deste ciclo
+  const daysInCloseMonth = new Date(invoiceCloseYear, invoiceCloseMonth + 1, 0).getDate();
+  const actualClosingDay = Math.min(closingDay, daysInCloseMonth);
+
+  // Calcula a data de vencimento da fatura
+  let dueYear = invoiceCloseYear;
+  let dueMonth = invoiceCloseMonth;
+  if (dueDay <= closingDay) {
+    dueMonth += 1;
+    if (dueMonth > 11) {
+      dueMonth = 0;
+      dueYear += 1;
+    }
+  }
+  const daysInDueMonth = new Date(dueYear, dueMonth + 1, 0).getDate();
+  const actualDueDay = Math.min(dueDay, daysInDueMonth);
+
+  const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+  const periodLabel = `Fatura ${monthNames[invoiceCloseMonth]}/${invoiceCloseYear}`;
+
+  // Ciclo de referência atual do sistema
+  const now = new Date();
+  const refYear = (appState?.settings?.currentYear !== undefined) ? appState.settings.currentYear : now.getFullYear();
+  const refMonth = (appState?.settings?.currentMonth !== undefined) ? appState.settings.currentMonth : now.getMonth();
+
+  // Diferença em meses entre o fechamento desta fatura e o ciclo de referência
+  const monthDiff = (invoiceCloseYear - refYear) * 12 + (invoiceCloseMonth - refMonth);
+
+  let autoCycle = 'current';
+  if (monthDiff > 0) {
+    autoCycle = 'next';
+  } else if (monthDiff < 0) {
+    autoCycle = 'previous';
+  } else {
+    autoCycle = 'current';
+  }
+
+  // Permite forçar manualmente
+  let finalCycle = autoCycle;
+  if (overrideChoice === 'current') {
+    finalCycle = 'current';
+  } else if (overrideChoice === 'next') {
+    finalCycle = 'next';
+  }
+
+  const isNext = finalCycle === 'next';
+
+  let cycleLabel = 'Fatura Atual';
+  if (finalCycle === 'next') {
+    cycleLabel = 'Próxima Fatura';
+  } else if (finalCycle === 'previous') {
+    cycleLabel = 'Fatura Anterior';
+  }
+  if (overrideChoice === 'current' || overrideChoice === 'next') {
+    cycleLabel += ' (Manual)';
+  }
+
+  const closingDateBR = `${String(actualClosingDay).padStart(2, '0')}/${String(invoiceCloseMonth + 1).padStart(2, '0')}/${invoiceCloseYear}`;
+  const dueDateBR = `${String(actualDueDay).padStart(2, '0')}/${String(dueMonth + 1).padStart(2, '0')}/${dueYear}`;
+
+  let reason = '';
+  if (overrideChoice === 'current') {
+    reason = `Forçado manualmente para a <strong>Fatura Atual</strong> (${periodLabel}).`;
+  } else if (overrideChoice === 'next') {
+    reason = `Forçado manualmente para a <strong>Próxima Fatura</strong> (${periodLabel}).`;
+  } else {
+    if (txDay > closingDay) {
+      reason = `Compra em <strong>${String(txDay).padStart(2, '0')}/${String(txMonth + 1).padStart(2, '0')}</strong> (após fechamento dia ${actualClosingDay}). Entra na <strong>${periodLabel}</strong> (fecha em ${closingDateBR}, vence em ${dueDateBR}) ➔ <em>${cycleLabel}</em>.`;
+    } else {
+      reason = `Compra em <strong>${String(txDay).padStart(2, '0')}/${String(txMonth + 1).padStart(2, '0')}</strong> (até fechamento dia ${actualClosingDay}). Entra na <strong>${periodLabel}</strong> (fecha em ${closingDateBR}, vence em ${dueDateBR}) ➔ <em>${cycleLabel}</em>.`;
+    }
+  }
 
   return {
-    cycle: isNext ? 'next' : 'current',
-    label: isNext ? 'Próxima Fatura' : 'Fatura Atual',
+    cycle: finalCycle,
+    invoicePeriod: invoicePeriodKey,
+    periodLabel,
+    label: `${cycleLabel} (${monthNames[invoiceCloseMonth].slice(0, 3)}/${invoiceCloseYear})`,
+    shortLabel: cycleLabel,
+    closingDateStr: closingDateBR,
+    dueDateStr: dueDateBR,
+    reason,
     isNext,
-    closingDay,
-    dueDay,
-    reason: isNext
-      ? `Fechamento no dia ${closingDay}. Como a data da compra é dia ${day} (após o fechamento), entra na <strong>PRÓXIMA FATURA</strong> (melhor dia de compra!).`
-      : `Fechamento no dia ${closingDay}. Como a data da compra é dia ${day} (até o fechamento), entra na <strong>FATURA ATUAL</strong> a pagar.`
+    closingDay: actualClosingDay,
+    dueDay: actualDueDay,
+    invoiceCloseYear,
+    invoiceCloseMonth
   };
 }
 
@@ -2410,8 +2689,10 @@ function updateTxInvoiceHelper() {
 
   if (badge) {
     badge.textContent = info.label;
-    if (info.isNext) {
+    if (info.cycle === 'next') {
       badge.className = 'badge-invoice badge-invoice-next';
+    } else if (info.cycle === 'previous') {
+      badge.className = 'badge-invoice badge-invoice-previous';
     } else {
       badge.className = 'badge-invoice badge-invoice-current';
     }
@@ -2573,12 +2854,26 @@ function handleTransactionSubmit(e) {
     return;
   }
 
+  if (type === 'transfer') {
+    if (!destinationAccountId) {
+      showToast('Selecione a conta de destino para a transferência.', 'error');
+      return;
+    }
+    if (accountId === destinationAccountId) {
+      showToast('A conta de origem e a conta de destino não podem ser a mesma.', 'error');
+      return;
+    }
+  }
+
   // Calculate credit card invoice cycle if origin is card
   let invoiceCycle = 'current';
+  let invoicePeriod = null;
   if (originType === 'card') {
     const overrideChoice = document.getElementById('txInvoiceCycleSelect')?.value || 'auto';
     const cardObj = appState.cards.find(c => c.id === accountId);
-    invoiceCycle = getCardInvoiceCycleInfo(cardObj, date, overrideChoice).cycle;
+    const cycleInfo = getCardInvoiceCycleInfo(cardObj, date, overrideChoice);
+    invoiceCycle = cycleInfo.cycle;
+    invoicePeriod = cycleInfo.invoicePeriod;
   }
 
   if (id) {
@@ -2593,9 +2888,11 @@ function handleTransactionSubmit(e) {
       tx.originType = originType;
       tx.cardId = originType === 'card' ? accountId : null;
       tx.invoiceCycle = originType === 'card' ? invoiceCycle : null;
-      tx.destinationAccountId = destinationAccountId;
+      tx.invoicePeriod = originType === 'card' ? invoicePeriod : null;
+      tx.invoiceCycleOverride = originType === 'card' ? (document.getElementById('txInvoiceCycleSelect')?.value || 'auto') : null;
+      tx.destinationAccountId = type === 'transfer' ? destinationAccountId : null;
       tx.purpose = purpose;
-      tx.category = category;
+      tx.category = type === 'transfer' ? 'transfer' : category;
       tx.status = status;
       tx.type = type;
 
@@ -2612,9 +2909,11 @@ function handleTransactionSubmit(e) {
       originType,
       cardId: originType === 'card' ? accountId : null,
       invoiceCycle: originType === 'card' ? invoiceCycle : null,
-      destinationAccountId,
+      invoicePeriod: originType === 'card' ? invoicePeriod : null,
+      invoiceCycleOverride: originType === 'card' ? (document.getElementById('txInvoiceCycleSelect')?.value || 'auto') : null,
+      destinationAccountId: type === 'transfer' ? destinationAccountId : null,
       purpose,
-      category,
+      category: type === 'transfer' ? 'transfer' : category,
       status,
       type
     };
@@ -2624,6 +2923,7 @@ function handleTransactionSubmit(e) {
     showToast('Lançamento registrado com sucesso!', 'success');
   }
 
+  recalculateCardInvoices();
   saveLocalState();
   closeModal('modalTransaction');
   renderApp();
@@ -2634,14 +2934,7 @@ function adjustBalanceForTx(tx, isRevert = false) {
   const multiplier = isRevert ? -1 : 1;
 
   if (tx.originType === 'card' || tx.cardId) {
-    const card = appState.cards.find(c => c.id === (tx.cardId || tx.accountId));
-    if (card) {
-      if (tx.invoiceCycle === 'next') {
-        card.nextInvoice = Math.max(0, (Number(card.nextInvoice) || 0) + (tx.amount * multiplier));
-      } else {
-        card.invoice = Math.max(0, (Number(card.invoice) || 0) + (tx.amount * multiplier));
-      }
-    }
+    recalculateCardInvoices();
   } else {
     const acc = appState.accounts.find(a => a.id === tx.accountId);
     if (!acc) return;
@@ -2669,6 +2962,7 @@ function toggleTxStatus(txId) {
   tx.status = wasCompleted ? 'pending' : 'completed';
   adjustBalanceForTx(tx, false);
 
+  recalculateCardInvoices();
   saveLocalState();
   renderApp();
   showToast(`Situação alterada para ${tx.status === 'completed' ? 'Concluído' : 'Pendente'}`, 'info');
@@ -2692,9 +2986,17 @@ function editTransaction(txId) {
   const accSelect = document.getElementById('txFormAccount');
   if (accSelect) accSelect.value = tx.cardId || tx.accountId;
 
+  if (tx.type === 'transfer') {
+    populateTransferDestinationOptions(tx.accountId, tx.destinationAccountId);
+    const destSelect = document.getElementById('txFormDestination');
+    if (destSelect && tx.destinationAccountId) {
+      destSelect.value = tx.destinationAccountId;
+    }
+  }
+
   const overrideSelect = document.getElementById('txInvoiceCycleSelect');
   if (overrideSelect) {
-    overrideSelect.value = tx.invoiceCycle || 'auto';
+    overrideSelect.value = tx.invoiceCycleOverride || tx.invoiceCycle || 'auto';
   }
   updateTxInvoiceHelper();
 
@@ -2711,6 +3013,7 @@ function deleteTransaction(txId) {
   if (confirm(`Deseja excluir o lançamento "${tx.description}"?`)) {
     adjustBalanceForTx(tx, true);
     appState.transactions = appState.transactions.filter(t => t.id !== txId);
+    recalculateCardInvoices();
     saveLocalState();
     renderApp();
     showToast('Lançamento excluído.', 'info');

@@ -2116,3 +2116,48 @@ a:hover {
   100% { background: transparent; }
 }
 
+/* Enhancements: Transfers & Invoices */
+.val-transfer {
+  color: #818cf8 !important;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.transfer-amount {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.transfer-origin-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+
+.transfer-arrow {
+  color: var(--color-primary);
+  font-weight: 800;
+  font-size: 0.95rem;
+}
+
+.cycle-previous {
+  background: rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.badge-invoice-previous {
+  background: rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.card-invoice-counts-badge {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  font-weight: normal;
+  margin-left: 4px;
+}
+
