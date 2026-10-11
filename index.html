@@ -18,7 +18,7 @@
   <!-- Chart.js via CDN -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   
-  <link rel="stylesheet" href="styles.css?v=2.5">
+  <link rel="stylesheet" href="styles.css?v=2.6">
 </head>
 <body class="dark-theme">
   <!-- APP WRAPPER -->
@@ -1201,13 +1201,13 @@
 
             <div class="form-group">
               <label for="cardFormLimit">Limite Total de Crédito (R$) *</label>
-              <input type="number" step="0.01" id="cardFormLimit" required placeholder="Ex: 5000.00">
+              <input type="text" id="cardFormLimit" required placeholder="0,00 ou 5000,00" class="calc-eval-input" autocomplete="off" oninput="handleCalcLiveInput(this)" onblur="handleCalcBlur(this)">
             </div>
 
             <div class="form-group">
-              <label for="cardFormInvoice">Fatura Atual Inicial (R$)</label>
-              <input type="number" step="0.01" id="cardFormInvoice" value="0.00" placeholder="0.00">
-              <small class="field-hint">Quanto você tem a pagar nesta fatura no momento</small>
+              <label for="cardFormInvoice" id="cardFormInvoiceLabel">Fatura Atual a Pagar (R$)</label>
+              <input type="text" id="cardFormInvoice" value="0,00" placeholder="0,00 ou 1500 + 200" class="calc-eval-input" autocomplete="off" oninput="handleCalcLiveInput(this)" onblur="handleCalcBlur(this)">
+              <small class="field-hint">Valor real atual a pagar nesta fatura</small>
             </div>
 
             <div class="form-group">
@@ -1228,7 +1228,7 @@
         </div>
         <div class="modal-footer">
           <button type="button" class="btn-secondary" onclick="closeModal('modalCreditCard')">Cancelar</button>
-          <button type="submit" class="btn-primary">Salvar Cartão</button>
+          <button type="submit" class="btn-primary" id="cardFormSubmitBtn">Salvar Cartão</button>
         </div>
       </form>
     </div>
@@ -1673,6 +1673,6 @@
   <div id="toastContainer" class="toast-container"></div>
 
   <!-- JAVASCRIPT PRINCIPAL -->
-  <script src="app.js?v=2.5"></script>
+  <script src="app.js?v=2.6"></script>
 </body>
 </html>

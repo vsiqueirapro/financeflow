@@ -569,10 +569,18 @@ function closeMobileSidebar() {
   }
 }
 
-// Expõe funções de navegação globalmente
+// Expõe funções de navegação e cartões globalmente
 window.switchView = switchView;
 window.toggleMobileSidebar = toggleMobileSidebar;
 window.closeMobileSidebar = closeMobileSidebar;
+window.openNewCreditCardModal = openNewCreditCardModal;
+window.editCreditCard = editCreditCard;
+window.handleCreditCardFormSubmit = handleCreditCardFormSubmit;
+window.deleteCreditCard = deleteCreditCard;
+window.openPayInvoiceModal = openPayInvoiceModal;
+window.openNewCardExpenseModal = openNewCardExpenseModal;
+window.cardRolloverInvoice = cardRolloverInvoice;
+window.handleSpreadsheetCardFieldBlur = handleSpreadsheetCardFieldBlur;
 
 function handlePurposeFilterChange(value) {
   globalSelectedPurpose = value;
@@ -1454,7 +1462,7 @@ function recalculateCardInvoices() {
   if (!appState || !Array.isArray(appState.cards)) return;
 
   appState.cards.forEach(card => {
-    const cardTxs = appState.transactions.filter(t => 
+    const cardTxs = (appState.transactions || []).filter(t => 
       (t.originType === 'card' || t.cardId === card.id || t.accountId === card.id) &&
       t.status === 'completed' &&
       t.type === 'expense'
@@ -1480,10 +1488,14 @@ function recalculateCardInvoices() {
     card._currentCount = currentCount;
     card._nextCount = nextCount;
 
-    // Se houver transações registradas para este cartão, atualiza dinamicamente os valores
+    // Se houver transações registradas para este cartão, incorpora ajuste manual base
     if (cardTxs.length > 0) {
-      card.invoice = Math.round(currentSum * 100) / 100;
+      const manualBase = Number(card.manualAdjustment || 0);
+      card.invoice = Math.max(0, Math.round((currentSum + manualBase) * 100) / 100);
       card.nextInvoice = Math.round(nextSum * 100) / 100;
+    } else {
+      card.invoice = Math.round(Number(card.invoice || 0) * 100) / 100;
+      card.nextInvoice = Math.round(Number(card.nextInvoice || 0) * 100) / 100;
     }
   });
 }
@@ -1579,6 +1591,9 @@ function renderCardsView() {
               </button>
               <button class="btn-action-pill" onclick="openPayInvoiceModal('${card.id}')" title="Pagar e abater fatura">
                 ✅ Pagar Fatura
+              </button>
+              <button class="btn-action-pill" onclick="editCreditCard('${card.id}')" title="Ajustar limite, fatura e datas deste cartão">
+                ⚙️ Ajustar Dados
               </button>
               ${nextInv > 0 ? `
               <button class="btn-action-pill" onclick="cardRolloverInvoice('${card.id}')" title="Virar ciclo da fatura">
@@ -1741,6 +1756,20 @@ function handleSpreadsheetCardFieldBlur(inputEl, cardId, field) {
     val = parseAmountOrCalc(raw);
     card[field] = val;
     inputEl.value = val.toFixed(2);
+
+    if (field === 'invoice') {
+      const cardTxs = (appState.transactions || []).filter(t => 
+        (t.originType === 'card' || t.cardId === card.id || t.accountId === card.id) &&
+        t.status === 'completed' &&
+        t.type === 'expense'
+      );
+      let currentTxSum = 0;
+      cardTxs.forEach(tx => {
+        const cycleInfo = getCardInvoiceCycleInfo(card, tx.date, tx.invoiceCycle);
+        if (cycleInfo.cycle === 'current') currentTxSum += Number(tx.amount || 0);
+      });
+      card.manualAdjustment = Math.round((val - currentTxSum) * 100) / 100;
+    }
   }
 
   inputEl.classList.add('cell-saved-flash');
@@ -1891,9 +1920,16 @@ function openNewCreditCardModal() {
   document.getElementById('modalCreditCardTitle').textContent = 'Cadastrar Cartão de Crédito';
   document.getElementById('formCreditCard').reset();
   document.getElementById('cardFormId').value = '';
-  document.getElementById('cardFormInvoice').value = '0.00';
+  document.getElementById('cardFormLimit').value = '';
+  document.getElementById('cardFormInvoice').value = '0,00';
   document.getElementById('cardFormClosing').value = '20';
   document.getElementById('cardFormDue').value = '1';
+  document.getElementById('cardFormColor').value = '#820ad1';
+
+  const submitBtn = document.getElementById('cardFormSubmitBtn');
+  if (submitBtn) submitBtn.textContent = 'Cadastrar Cartão';
+  const invoiceLabel = document.getElementById('cardFormInvoiceLabel');
+  if (invoiceLabel) invoiceLabel.textContent = 'Fatura Atual Inicial (R$)';
 
   populatePurposeOptions('cardFormPurpose');
   openModal('modalCreditCard');
@@ -1903,15 +1939,31 @@ function editCreditCard(cardId) {
   const card = appState.cards.find(c => c.id === cardId);
   if (!card) return;
 
-  document.getElementById('modalCreditCardTitle').textContent = 'Editar Cartão de Crédito';
+  document.getElementById('modalCreditCardTitle').textContent = `Ajustar Dados: ${card.name}`;
   document.getElementById('cardFormId').value = card.id;
   document.getElementById('cardFormName').value = card.name;
-  document.getElementById('cardFormBank').value = card.bank || 'Outro';
-  document.getElementById('cardFormLimit').value = card.limit || '';
-  document.getElementById('cardFormInvoice').value = card.invoice || '0.00';
-  document.getElementById('cardFormClosing').value = card.closingDay || '';
-  document.getElementById('cardFormDue').value = card.dueDay || '';
+  
+  const bankSelect = document.getElementById('cardFormBank');
+  if (bankSelect) {
+    if (card.bank && !Array.from(bankSelect.options).some(o => o.value === card.bank)) {
+      const opt = document.createElement('option');
+      opt.value = card.bank;
+      opt.textContent = card.bank;
+      bankSelect.appendChild(opt);
+    }
+    bankSelect.value = card.bank || 'Outro';
+  }
+
+  document.getElementById('cardFormLimit').value = card.limit !== undefined && card.limit !== null ? Number(card.limit).toFixed(2) : '';
+  document.getElementById('cardFormInvoice').value = card.invoice !== undefined && card.invoice !== null ? Number(card.invoice).toFixed(2) : '0.00';
+  document.getElementById('cardFormClosing').value = card.closingDay || '20';
+  document.getElementById('cardFormDue').value = card.dueDay || '1';
   document.getElementById('cardFormColor').value = card.color || '#820ad1';
+
+  const submitBtn = document.getElementById('cardFormSubmitBtn');
+  if (submitBtn) submitBtn.textContent = 'Salvar Alterações';
+  const invoiceLabel = document.getElementById('cardFormInvoiceLabel');
+  if (invoiceLabel) invoiceLabel.textContent = 'Fatura Atual a Pagar (R$)';
 
   populatePurposeOptions('cardFormPurpose', card.purpose);
   openModal('modalCreditCard');
@@ -1923,8 +1975,8 @@ function handleCreditCardFormSubmit(e) {
   const name = document.getElementById('cardFormName').value.trim();
   const bank = document.getElementById('cardFormBank').value;
   const purpose = document.getElementById('cardFormPurpose').value;
-  const limit = parseFloat(document.getElementById('cardFormLimit').value) || 0;
-  const invoice = parseFloat(document.getElementById('cardFormInvoice').value) || 0;
+  const limit = parseAmountOrCalc(document.getElementById('cardFormLimit').value) || 0;
+  const invoice = parseAmountOrCalc(document.getElementById('cardFormInvoice').value) || 0;
   const closingDay = parseInt(document.getElementById('cardFormClosing').value) || 20;
   const dueDay = parseInt(document.getElementById('cardFormDue').value) || 1;
   const color = document.getElementById('cardFormColor').value;
@@ -1936,11 +1988,25 @@ function handleCreditCardFormSubmit(e) {
       card.bank = bank;
       card.purpose = purpose;
       card.limit = limit;
-      card.invoice = invoice;
       card.closingDay = closingDay;
       card.dueDay = dueDay;
       card.color = color;
-      showToast('Cartão de crédito atualizado com sucesso!', 'success');
+
+      // Sincroniza o ajuste manual da fatura com as compras existentes
+      const cardTxs = (appState.transactions || []).filter(t => 
+        (t.originType === 'card' || t.cardId === card.id || t.accountId === card.id) &&
+        t.status === 'completed' &&
+        t.type === 'expense'
+      );
+      let currentTxSum = 0;
+      cardTxs.forEach(tx => {
+        const cycleInfo = getCardInvoiceCycleInfo(card, tx.date, tx.invoiceCycle);
+        if (cycleInfo.cycle === 'current') currentTxSum += Number(tx.amount || 0);
+      });
+      card.manualAdjustment = Math.round((invoice - currentTxSum) * 100) / 100;
+      card.invoice = invoice;
+
+      showToast(`Cartão "${card.name}" atualizado com sucesso!`, 'success');
     }
   } else {
     const newCard = {
@@ -1950,12 +2016,13 @@ function handleCreditCardFormSubmit(e) {
       purpose,
       limit,
       invoice,
+      manualAdjustment: invoice,
       closingDay,
       dueDay,
       color
     };
     appState.cards.push(newCard);
-    showToast('Cartão de crédito cadastrado com sucesso!', 'success');
+    showToast(`Cartão "${name}" cadastrado com sucesso!`, 'success');
   }
 
   saveLocalState();
@@ -2035,6 +2102,7 @@ function handlePayInvoiceSubmit(e) {
 
   // Abate credit card invoice
   card.invoice = Math.max(0, (Number(card.invoice) || 0) - amount);
+  card.manualAdjustment = Math.round((Number(card.manualAdjustment || 0) - amount) * 100) / 100;
 
   // Record payment transaction
   appState.transactions.push({
@@ -2818,13 +2886,23 @@ function safeEvaluateMath(expr) {
 }
 
 function parseAmountOrCalc(val) {
-  if (typeof val === 'number') return val;
+  if (typeof val === 'number') return isNaN(val) ? 0 : val;
   if (!val) return 0;
-  const str = String(val).trim();
+  let str = String(val).trim().replace(/^R\$\s*/i, '');
+  
+  // Avalia expressões matemáticas se houver operador (ex: "1500 + 350")
   const evaluated = safeEvaluateMath(str);
   if (evaluated !== null) return evaluated;
-  const cleaned = str.replace(',', '.');
-  return parseFloat(cleaned) || 0;
+
+  // Se possui ponto e vírgula, ex: 1.500,50
+  if (str.includes('.') && str.includes(',')) {
+    str = str.replace(/\./g, '').replace(',', '.');
+  } else if (str.includes(',')) {
+    str = str.replace(',', '.');
+  }
+  
+  const parsed = parseFloat(str);
+  return isNaN(parsed) ? 0 : parsed;
 }
 
 function handleCalcLiveInput(inputEl) {
@@ -3968,7 +4046,7 @@ async function forceAppUpdate() {
 
 function initPWA() {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js?v=2.5')
+    navigator.serviceWorker.register('./sw.js?v=2.6')
       .then(reg => {
         console.log('ServiceWorker registered:', reg.scope);
         // Force check for updates every time
