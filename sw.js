@@ -1,10 +1,10 @@
-// Service Worker for FinanceFlow PWA (v2.3 - Network-First Strategy)
-const CACHE_NAME = 'financeflow-v2.3';
+// Service Worker for FinanceFlow PWA (v2.4 - Network-First Strategy)
+const CACHE_NAME = 'financeflow-v2.4';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
-  './styles.css?v=2.3',
-  './app.js?v=2.3',
+  './styles.css?v=2.4',
+  './app.js?v=2.4',
   './manifest.json',
   'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap',
   'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'

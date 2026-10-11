@@ -1619,6 +1619,24 @@ a:hover {
    MOBILE BOTTOM NAVIGATION & RESPONSIVE
    ========================================================================= */
 
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+  z-index: 950;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.sidebar-backdrop.active {
+  display: block;
+  opacity: 1;
+}
+
 .mobile-bottom-nav {
   display: none;
 }
@@ -1626,6 +1644,18 @@ a:hover {
 @media (max-width: 900px) {
   .app-sidebar {
     display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 280px;
+    height: 100vh;
+    height: 100dvh;
+    z-index: 1000;
+    box-shadow: 10px 0 30px rgba(0, 0, 0, 0.7);
+    border-right: 1px solid var(--border-medium);
+  }
+  .app-sidebar.show-mobile {
+    display: flex !important;
   }
   
   .mobile-menu-btn, .mobile-brand {

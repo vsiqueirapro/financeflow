@@ -71,17 +71,23 @@ let syncDebounceTimer = null;
 // INITIALIZATION & STATE PERSISTENCE
 // =========================================================================
 
-document.addEventListener('DOMContentLoaded', () => {
+function bootApp() {
   initAppState();
   initDateSelectors();
   initNavigation();
   initPWA();
   renderApp();
   
-  if (appState.settings.driveScriptUrl) {
+  if (appState && appState.settings && appState.settings.driveScriptUrl) {
     syncWithGoogleDrive('pull', true);
   }
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', bootApp);
+} else {
+  bootApp();
+}
 
 function sanitizeAndMigrateState(rawState) {
   let s = rawState;
@@ -471,46 +477,102 @@ function changeMonth(delta) {
 
 function initNavigation() {
   document.querySelectorAll('.sidebar-nav .nav-item').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (e) => {
       const view = btn.getAttribute('data-view');
-      switchView(view);
+      if (view) switchView(view);
     });
   });
 
   document.querySelectorAll('.mobile-bottom-nav .mobile-nav-item').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (e) => {
       const view = btn.getAttribute('data-view');
-      switchView(view);
+      if (view) switchView(view);
+    });
+  });
+
+  // Fechar modais ao clicar no fundo escuro (backdrop)
+  document.querySelectorAll('.modal-overlay').forEach(modal => {
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        modal.classList.remove('active');
+      }
     });
   });
 }
 
 function switchView(viewName) {
+  if (!viewName) return;
   currentActiveView = viewName;
 
+  // Alterna painéis
   document.querySelectorAll('.view-panel').forEach(p => p.classList.remove('active'));
   const target = document.getElementById(`view-${viewName}`);
-  if (target) target.classList.add('active');
+  if (target) {
+    target.classList.add('active');
+  } else {
+    console.warn(`Painel de visualização não encontrado: view-${viewName}`);
+  }
 
+  // Atualiza botões ativos no menu lateral desktop
   document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => {
     b.classList.toggle('active', b.getAttribute('data-view') === viewName);
   });
 
+  // Atualiza botões ativos na barra mobile
   document.querySelectorAll('.mobile-bottom-nav .mobile-nav-item').forEach(b => {
     b.classList.toggle('active', b.getAttribute('data-view') === viewName);
   });
 
+  // Fecha o menu lateral mobile caso esteja aberto
+  closeMobileSidebar();
+
+  // Rola até o topo da área de conteúdo
+  const contentArea = document.querySelector('.content-scrollable');
+  if (contentArea) {
+    contentArea.scrollTop = 0;
+  }
+
+  // Atualiza gráficos de forma segura com isolamento de erros
   setTimeout(() => {
-    renderCharts();
+    try {
+      renderCharts();
+    } catch (err) {
+      console.warn('Erro ao atualizar gráficos após troca de visualização:', err);
+    }
   }, 60);
 }
 
 function toggleMobileSidebar() {
   const sidebar = document.getElementById('appSidebar');
+  const backdrop = document.getElementById('sidebarBackdrop');
   if (sidebar) {
-    sidebar.style.display = sidebar.style.display === 'flex' ? 'none' : 'flex';
+    const isShowing = sidebar.classList.contains('show-mobile');
+    if (isShowing) {
+      closeMobileSidebar();
+    } else {
+      sidebar.classList.add('show-mobile');
+      sidebar.style.display = 'flex';
+      if (backdrop) backdrop.classList.add('active');
+    }
   }
 }
+
+function closeMobileSidebar() {
+  const sidebar = document.getElementById('appSidebar');
+  const backdrop = document.getElementById('sidebarBackdrop');
+  if (sidebar) {
+    sidebar.classList.remove('show-mobile');
+    sidebar.style.display = '';
+  }
+  if (backdrop) {
+    backdrop.classList.remove('active');
+  }
+}
+
+// Expõe funções de navegação globalmente
+window.switchView = switchView;
+window.toggleMobileSidebar = toggleMobileSidebar;
+window.closeMobileSidebar = closeMobileSidebar;
 
 function handlePurposeFilterChange(value) {
   globalSelectedPurpose = value;
@@ -2436,7 +2498,10 @@ function populateTransferDestinationOptions(selectedSourceId, selectedDestId) {
 }
 
 function handleTxTypeRadioChange(type) {
-  document.querySelectorAll('.type-tab-btn').forEach(btn => btn.classList.remove('active'));
+  ['tabTypeExpense', 'tabTypeIncome', 'tabTypeTransfer'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('active');
+  });
   const activeTab = document.getElementById(`tabType${type.charAt(0).toUpperCase() + type.slice(1)}`);
   if (activeTab) activeTab.classList.add('active');
 
@@ -3903,7 +3968,7 @@ async function forceAppUpdate() {
 
 function initPWA() {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js?v=2.2')
+    navigator.serviceWorker.register('./sw.js?v=2.4')
       .then(reg => {
         console.log('ServiceWorker registered:', reg.scope);
         // Force check for updates every time
